@@ -53,6 +53,7 @@
         button { cursor: pointer; padding: 12px; border: none; border-radius: 5px; font-weight: bold; color: white; transition: 0.2s; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 5px;}
         button:hover { transform: translateY(-1px); filter: brightness(1.1); box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         .btn-blue { background: var(--da-blue); width: 100%; }
+        .btn-green { background: #27ae60; width: 100%; color: white; }
         .btn-red { background: var(--da-red); width: 100%; margin-top: 15px; padding: 15px; font-size: 14px; box-shadow: 0 4px 10px rgba(211, 17, 69, 0.2);}
         .btn-dark { background: var(--da-black); }
 
@@ -80,6 +81,7 @@
     <div class="logo">DETROIT <span>AXLE</span> | FITMENT AUTO-PARSER</div>
     <div style="display: flex; gap: 10px;">
         <button class="btn-dark" onclick="table.clearData()">🧹 CLEAR TABLE</button>
+        <button class="btn-green" id="copyBtn" onclick="copyData()" style="width: auto; padding: 10px 20px;">📋 COPY DATA</button>
         <button class="btn-blue" onclick="exportData()" style="width: auto; padding: 10px 20px;">⬇ EXPORT EXCEL</button>
     </div>
 </header>
@@ -101,8 +103,8 @@
         <div class="section-title">Raw Fitment Data</div>
         <div class="form-group">
             <label>Paste Text Block Here</label>
-            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2001 HONDA ACCORD Coupe"></textarea>
-            <span style="font-size: 10px; color: #888; margin-top: 5px;">If a line fails validation, it will safely remain in this box so you can manually edit it!</span>
+            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2005 HONDA ACCORD Coupe 4 Cylinder&#10;2005 HONDA ACCORD Coupe V6"></textarea>
+            <span style="font-size: 10px; color: #888; margin-top: 5px;">Cylinders will filter the DB and then automatically delete themselves from your Callouts!</span>
             <div id="error-log"></div>
         </div>
 
@@ -153,7 +155,6 @@
 </div>
 
 <script>
-// We removed the Body Type column so the export perfectly matches your format.
 const TABLE_COLUMNS = [
     {title: "Date", field: "Date", editor: "input", width: 90},
     {title: "Agent Name", field: "Agent Name", editor: "input", width: 100},
@@ -246,6 +247,7 @@ function buildCompressedTree(data) {
     let kRegion = keys.find(k => k.toLowerCase() === 'region') || keys.find(k => k.toLowerCase().includes('region')) || "";
     let kRearBrake = keys.find(k => k.toLowerCase().includes('drum/disc')) || keys.find(k => k.toLowerCase().includes('rear brake')) || "";
     let kBody = keys.find(k => k.toLowerCase() === 'body type' || k.toLowerCase() === 'body type name') || keys.find(k => k.toLowerCase().includes('body')) || "";
+    let kCyl = keys.find(k => k.toLowerCase() === 'cyl' || k.toLowerCase() === 'cylinders') || "";
 
     if (!kMake || !kModel || !kYear) {
         document.getElementById('loading').style.display = 'none';
@@ -265,6 +267,7 @@ function buildCompressedTree(data) {
         let regionNorm = kRegion ? String(row[kRegion]).trim() : "";
         let brakeNorm = kRearBrake ? String(row[kRearBrake]).trim() : "";
         let bodyNorm = kBody ? String(row[kBody]).trim() : "";
+        let cylNorm = kCyl ? String(row[kCyl]).trim() : "";
         
         let literVal = kLiter ? String(row[kLiter]).trim() : "";
         let parsedL = parseFloat(literVal);
@@ -282,7 +285,8 @@ function buildCompressedTree(data) {
             drive: driveNorm, 
             region: regionNorm,
             brake: brakeNorm,
-            body: bodyNorm 
+            body: bodyNorm,
+            cyl: cylNorm
         });
     }
 
@@ -347,6 +351,17 @@ function parseAndGenerate() {
         let extractedDrive = driveMatch ? driveMatch[1].toUpperCase() : "";
         if (extractedDrive === "2WD") extractedDrive = "RWD";
         
+        let cylMatch = remainderUpper.match(/\b(V-?6|V-?8|V-?10|V-?12|\d{1,2}\s*CYL(?:INDER)?S?|I-?4|I-?6|L-?4|L-?6)\b/i);
+        let extractedCyl = "";
+        if (cylMatch) {
+            let s = cylMatch[1].toUpperCase().replace(/[-\s]/g, '');
+            if (s.includes('4')) extractedCyl = "4";
+            else if (s.includes('6')) extractedCyl = "6";
+            else if (s.includes('8')) extractedCyl = "8";
+            else if (s.includes('10')) extractedCyl = "10";
+            else if (s.includes('12')) extractedCyl = "12";
+        }
+
         let bodyMatch = remainderUpper.match(/\b(COUPE|SEDAN|HATCHBACK|CONVERTIBLE|WAGON|SUV|VAN|MINIVAN|CREW CAB|EXTENDED CAB|REGULAR CAB|QUAD CAB|MEGA CAB)\b/i);
         let extractedBody = bodyMatch ? bodyMatch[1] : "";
 
@@ -417,9 +432,22 @@ function parseAndGenerate() {
             availableVehicles = filtered;
         }
         
-        // INTERCEPTOR FILTER: Filter the catalog using the Body Type
+        if (extractedCyl) {
+            let filtered = availableVehicles.filter(v => v.cyl === extractedCyl);
+            if (filtered.length === 0) {
+                let trueCyls = [...new Set(availableVehicles.map(v=>v.cyl))].filter(Boolean).join(' or ');
+                errorLogs.push(`[Line ${lineNum}] Skipped: Mismatch! Text asked for ${extractedCyl} Cyl, but catalog says ${displayModel} is [${trueCyls || 'N/A'}].`);
+                failedLines.push(originalLine);
+                return;
+            }
+            availableVehicles = filtered;
+        }
+
         if (extractedBody) {
-            let filtered = availableVehicles.filter(v => v.body && v.body.toUpperCase().includes(extractedBody.toUpperCase()));
+            let filtered = availableVehicles.filter(v => 
+                (v.body && v.body.toUpperCase().includes(extractedBody.toUpperCase())) ||
+                (v.sub && v.sub.toUpperCase().includes(extractedBody.toUpperCase()))
+            );
             if (filtered.length === 0) {
                 errorLogs.push(`[Line ${lineNum}] Skipped: Mismatch! Text asked for a ${extractedBody}, but catalog doesn't have it for ${year} ${displayMake} ${displayModel}.`);
                 failedLines.push(originalLine);
@@ -435,14 +463,12 @@ function parseAndGenerate() {
         let allSubsArray = [...allSubsForModel].filter(s => s).sort((a,b) => b.length - a.length);
 
         let cleanNotes = remainderOriginal; 
-
         let regexRepeatedModel = new RegExp(`\\b${escapeRegExp(foundModel)}\\b`, 'ig');
         cleanNotes = cleanNotes.replace(regexRepeatedModel, ' ');
 
-        // Note: I deliberately REMOVED the code that deleted the Body Type from the notes.
-        // It will now stay exactly where you pasted it!
-        if (literMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(literMatch[0])}\\b`, 'ig'), '');
-        if (driveMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(driveMatch[0])}\\b`, 'ig'), '');
+        let maskedForSubs = remainderOriginal;
+        if (cylMatch) maskedForSubs = maskedForSubs.replace(new RegExp(`\\b${escapeRegExp(cylMatch[0])}\\b`, 'ig'), '');
+        if (bodyMatch) maskedForSubs = maskedForSubs.replace(new RegExp(`\\b${escapeRegExp(bodyMatch[0])}\\b`, 'ig'), '');
 
         let mentionedSubs = [];
         let excludedSubs = [];
@@ -455,12 +481,10 @@ function parseAndGenerate() {
             let exceptRegex = new RegExp(`\\b(except|exc\\.?|excluding)\\s+(${escapedSub})${boundaryAfter}`, 'i');
             let normalRegex = new RegExp(`${boundaryBefore}(${escapedSub})${boundaryAfter}`, 'i');
 
-            if (exceptRegex.test(cleanNotes)) {
+            if (exceptRegex.test(maskedForSubs)) {
                 excludedSubs.push(sub);
-                cleanNotes = cleanNotes.replace(exceptRegex, '$3'); 
-            } else if (normalRegex.test(cleanNotes)) {
+            } else if (normalRegex.test(maskedForSubs)) {
                 mentionedSubs.push(sub);
-                cleanNotes = cleanNotes.replace(normalRegex, '$1$3'); 
             }
         });
 
@@ -483,6 +507,17 @@ function parseAndGenerate() {
             }
         }
 
+        if (literMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(literMatch[0])}\\b`, 'ig'), '');
+        if (driveMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(driveMatch[0])}\\b`, 'ig'), '');
+        if (cylMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(cylMatch[0])}\\b`, 'ig'), ''); 
+        
+        mentionedSubs.forEach(sub => {
+            cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(sub)}\\b`, 'ig'), '');
+        });
+        excludedSubs.forEach(sub => {
+            cleanNotes = cleanNotes.replace(new RegExp(`\\b(except|exc\\.?|excluding)\\s+${escapeRegExp(sub)}\\b`, 'ig'), '');
+        });
+
         cleanNotes = cleanNotes.replace(/\b(?:w\/|with)\b/gi, ''); 
         cleanNotes = cleanNotes.replace(/^[-\/;,() ]+|[-\/;,() ]+$/g, ''); 
         cleanNotes = cleanNotes.replace(/(?:\s|^)-+(?:\s|$)/g, ' ');
@@ -491,7 +526,7 @@ function parseAndGenerate() {
         let uniqueVehicleProfiles = [];
         let seenSet = new Set();
         availableVehicles.forEach(v => {
-            let key = `${v.sub}|${v.liter}|${v.drive}|${v.brake}|${v.region}|${v.body}`;
+            let key = `${v.sub}|${v.liter}|${v.drive}|${v.brake}|${v.region}`;
             if(!seenSet.has(key)) { seenSet.add(key); uniqueVehicleProfiles.push(v); }
         });
 
@@ -504,7 +539,7 @@ function parseAndGenerate() {
             
             row["Liter"] = vProfile.liter;
             row["Drive Type"] = vProfile.drive;
-            row["Notes"] = cleanNotes; // The body type (like "Coupe") safely lives here now
+            row["Notes"] = cleanNotes; 
             
             if (isRegionLocked) {
                 row["Region"] = regionChoice; 
@@ -559,6 +594,38 @@ function exportData() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "FitmentBatch");
     XLSX.writeFile(wb, `Fitment_Batch_${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+
+// NEW FUNCTION: Copies table data directly to clipboard without headers
+function copyData() {
+    const rawData = table.getData();
+    if(rawData.length === 0) return alert("Table is empty. Nothing to copy.");
+
+    const exportHeaders = TABLE_COLUMNS.map(c => c.field);
+    
+    let tsvString = "";
+    rawData.forEach((row, index) => {
+        let rowArray = exportHeaders.map(h => {
+            let cellValue = row[h] === undefined || row[h] === null ? "" : String(row[h]);
+            // Clean up any stray newlines or tabs to prevent breaking the Excel grid
+            return cellValue.replace(/\t/g, ' ').replace(/\n/g, ' '); 
+        });
+        tsvString += rowArray.join('\t') + (index < rawData.length - 1 ? '\n' : '');
+    });
+
+    navigator.clipboard.writeText(tsvString).then(() => {
+        const copyBtn = document.getElementById('copyBtn');
+        const originalText = copyBtn.innerText;
+        copyBtn.innerText = "✓ COPIED!";
+        copyBtn.style.backgroundColor = "#1e8449"; // Darker green on success
+        setTimeout(() => {
+            copyBtn.innerText = originalText;
+            copyBtn.style.backgroundColor = "#27ae60"; // Reset to standard green
+        }, 2000);
+    }).catch(err => {
+        console.error('Could not copy text: ', err);
+        alert("Failed to copy data. Your browser might be blocking clipboard access.");
+    });
 }
 </script>
 </body>
