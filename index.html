@@ -103,8 +103,8 @@
         <div class="section-title">Raw Fitment Data</div>
         <div class="form-group">
             <label>Paste Text Block Here</label>
-            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2005 CHRYSLER 300 SRT8"></textarea>
-            <span style="font-size: 10px; color: #888; margin-top: 5px;">"Contains" Submodel Matcher Active: Maps "SRT8" cleanly to "C SRT8" using your exact logic!</span>
+            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2005 HONDA ACCORD V6&#10;2008 DODGE CHARGER 8 Cyl"></textarea>
+            <span style="font-size: 10px; color: #888; margin-top: 5px;">Strict Engine Enforcer Active: Cylinders strictly filter rows and auto-scrub from notes!</span>
             <div id="error-log"></div>
         </div>
 
@@ -247,7 +247,10 @@ function buildCompressedTree(data) {
     let kRegion = keys.find(k => k.toLowerCase() === 'region') || keys.find(k => k.toLowerCase().includes('region')) || "";
     let kRearBrake = keys.find(k => k.toLowerCase().includes('drum/disc')) || keys.find(k => k.toLowerCase().includes('rear brake')) || "";
     
-    let standardKeys = [kMake, kModel, kYear, kSub, kLiter, kDrive, kRegion, kRearBrake].map(k => k.toLowerCase());
+    // Broadened engine/cylinder matching to catch tricky columns
+    let kCyl = keys.find(k => k.toLowerCase() === 'cyl' || k.toLowerCase() === 'cylinders' || k.toLowerCase() === 'engine' || k.toLowerCase() === 'engine type') || "";
+    
+    let standardKeys = [kMake, kModel, kYear, kSub, kLiter, kDrive, kRegion, kRearBrake, kCyl].map(k => k.toLowerCase());
     let auxKeys = keys.filter(k => !standardKeys.includes(k.toLowerCase()) && !/date|agent|part|position|link|notes/i.test(k));
 
     if (!kMake || !kModel || !kYear) {
@@ -267,6 +270,7 @@ function buildCompressedTree(data) {
         let driveNorm = normalizeDrive(kDrive ? String(row[kDrive]).trim() : "");
         let regionNorm = kRegion ? String(row[kRegion]).trim() : "";
         let brakeNorm = kRearBrake ? String(row[kRearBrake]).trim() : "";
+        let cylNorm = kCyl ? String(row[kCyl]).trim() : "";
         
         let literVal = kLiter ? String(row[kLiter]).trim() : "";
         let parsedL = parseFloat(literVal);
@@ -290,6 +294,7 @@ function buildCompressedTree(data) {
             drive: driveNorm, 
             region: regionNorm,
             brake: brakeNorm,
+            cyl: cylNorm,
             attrs: dynamicAttrs 
         });
     }
@@ -341,7 +346,7 @@ function parseAndGenerate() {
         // HARD FAIL: Year Missing
         let yearMatch = originalLine.match(/^(\d{4})\s+(.*)/);
         if(!yearMatch) {
-            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Valid Year not found at the beginning of the line.`);
+            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Valid Year not found.`);
             failedLines.push(originalLine);
             return; 
         }
@@ -380,7 +385,6 @@ function parseAndGenerate() {
             }
         }
         
-        // HARD FAIL: Make Missing
         if(!foundMake) {
             errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Unknown Make.`);
             failedLines.push(originalLine);
@@ -409,7 +413,6 @@ function parseAndGenerate() {
             }
         }
 
-        // HARD FAIL: Model Missing for that Year
         if(!foundModel) {
             let errorModelDisplay = fallbackModel ? fallbackModel.split(' ').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ') : "Unknown Model";
             let displayMake = foundMake.charAt(0) + foundMake.slice(1).toLowerCase();
@@ -424,7 +427,57 @@ function parseAndGenerate() {
         let availableVehicles = dbTree[foundMake][foundModel][year] || [];
         let cleanNotes = remainderOriginal; 
 
-        // --- THE SOFT-FALLBACK SYSTEM ---
+        // --- HARD FILTERS: LITER & DRIVE ---
+        if (extractedLiter) {
+            let filtered = availableVehicles.filter(v => v.liter === extractedLiter);
+            if (filtered.length > 0) {
+                availableVehicles = filtered;
+            } else {
+                errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Catalog lacks ${extractedLiter}L for ${displayModel}.`);
+                failedLines.push(originalLine);
+                return;
+            }
+        }
+
+        if (extractedDrive) {
+            let filtered = availableVehicles.filter(v => v.drive === extractedDrive);
+            if (filtered.length > 0) {
+                availableVehicles = filtered;
+            } else {
+                errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Catalog lacks ${extractedDrive} for ${displayModel}.`);
+                failedLines.push(originalLine);
+                return;
+            }
+        }
+        
+        // --- STRICT ENGINE ENFORCER ---
+        // If the user specified a cylinder, it MUST find it or it hard-fails the line.
+        let scrubCyl = false;
+        if (extractedCyl) {
+            let filtered = availableVehicles.filter(v => {
+                // If it matches exactly (e.g. "6" === "6")
+                if (v.cyl && String(v.cyl).trim() === extractedCyl) return true;
+                
+                // Deep scan submodel and attributes for V6, 6 Cyl, etc.
+                let flexRegex = new RegExp(`\\b(V-?${extractedCyl}|${extractedCyl}\\s*CYL(?:INDER)?S?|I-?${extractedCyl}|L-?${extractedCyl})\\b`, 'i');
+                if (v.cyl && flexRegex.test(v.cyl)) return true;
+                if (v.sub && flexRegex.test(v.sub)) return true;
+                if (v.attrs && v.attrs.some(a => flexRegex.test(a))) return true;
+                
+                return false;
+            });
+            
+            if (filtered.length > 0) {
+                availableVehicles = filtered;
+                scrubCyl = true; // Mark it to be erased from notes
+            } else {
+                errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Catalog lacks matching ${extractedCyl} Cylinder option for ${displayModel}.`);
+                failedLines.push(originalLine);
+                return; // Hard Fail
+            }
+        }
+
+        // --- OMNI-ATTRIBUTES (Soft Fallback) ---
         let validDynamicAttrs = [];
         let allAvailableAttrs = new Set();
         availableVehicles.forEach(v => {
@@ -442,39 +495,6 @@ function parseAndGenerate() {
                 }
             }
         });
-
-        let scrubLiter = false;
-        if (extractedLiter) {
-            let filtered = availableVehicles.filter(v => v.liter === extractedLiter);
-            if (filtered.length > 0) {
-                availableVehicles = filtered;
-                scrubLiter = true;
-            } else {
-                errorLogs.push(`[Line ${lineNum}] ⚠️ WARNING: Catalog lacks ${extractedLiter}L for ${displayModel}. Left in notes.`);
-            }
-        }
-
-        let scrubDrive = false;
-        if (extractedDrive) {
-            let filtered = availableVehicles.filter(v => v.drive === extractedDrive);
-            if (filtered.length > 0) {
-                availableVehicles = filtered;
-                scrubDrive = true;
-            } else {
-                errorLogs.push(`[Line ${lineNum}] ⚠️ WARNING: Catalog lacks ${extractedDrive} for ${displayModel}. Left in notes.`);
-            }
-        }
-        
-        let scrubCyl = false;
-        if (extractedCyl) {
-            let filtered = availableVehicles.filter(v => v.cyl === extractedCyl);
-            if (filtered.length > 0) {
-                availableVehicles = filtered;
-                scrubCyl = true;
-            } else {
-                errorLogs.push(`[Line ${lineNum}] ⚠️ WARNING: Catalog lacks ${extractedCyl} Cyl for ${displayModel}. Left in notes.`);
-            }
-        }
 
         // --- SUBMODEL MATCHER ---
         let allSubsForModel = new Set();
@@ -501,7 +521,7 @@ function parseAndGenerate() {
         let mentionedSubs = [];
         let excludedSubs = [];
 
-        // 1. EXACT SUBMODEL MATCHING
+        // 1. EXACT MATCHING
         allSubsArray.forEach(sub => {
             let escapedSub = escapeRegExp(sub);
             let boundaryBefore = `(^|[\\s,;\\/\\(\\)\\-])`;
@@ -512,36 +532,31 @@ function parseAndGenerate() {
 
             if (exceptRegex.test(maskedForSubs)) {
                 excludedSubs.push(sub);
+                maskedForSubs = maskedForSubs.replace(exceptRegex, '$1 $3');
             } else if (normalRegex.test(maskedForSubs)) {
                 mentionedSubs.push(sub);
+                maskedForSubs = maskedForSubs.replace(normalRegex, '$1 $3');
             }
         });
 
-        // 2. THE "CONTAINS" SUBMODEL MATCHER
-        // If no exact match is found, check if the text contains a word that exists INSIDE a catalog submodel.
+        // 2. CONTAINS MATCHING
         if (mentionedSubs.length === 0 && excludedSubs.length === 0) {
-            // Split the user's text into individual words, ignoring tiny 1-2 letter words
             let textWords = maskedForSubs.split(/[\s,;\\/\\(\\)\\-]+/).filter(w => w.length > 2);
-            
             textWords.forEach(word => {
                 let wordRegex = new RegExp(`\\b${escapeRegExp(word)}\\b`, 'i');
                 allSubsArray.forEach(sub => {
                     if (wordRegex.test(sub)) {
                         mentionedSubs.push(sub);
-                        // Make sure to scrub the trigger word so it doesn't get left behind!
                         cleanNotes = cleanNotes.replace(wordRegex, ' ');
                     }
                 });
             });
-            // Ensure we don't duplicate matches
             mentionedSubs = [...new Set(mentionedSubs)];
         }
 
-        // Submodel Soft Fallback Application
         let validMentionedSubs = mentionedSubs.filter(sub => availableVehicles.some(v => v.sub.toUpperCase() === sub.toUpperCase()));
         let validExcludedSubs = excludedSubs.filter(sub => availableVehicles.some(v => v.sub.toUpperCase() === sub.toUpperCase()));
 
-        // ONLY filter the vehicles if the submodel actually exists! 
         if (validMentionedSubs.length > 0) {
             availableVehicles = availableVehicles.filter(v => validMentionedSubs.some(m => m.toUpperCase() === v.sub.toUpperCase()));
         } 
@@ -550,7 +565,6 @@ function parseAndGenerate() {
         }
 
         // --- FINAL SCRUBBER ---
-        
         validDynamicAttrs.forEach(regex => {
             cleanNotes = cleanNotes.replace(regex, ' ');
         });
@@ -563,8 +577,9 @@ function parseAndGenerate() {
             cleanNotes = cleanNotes.replace(new RegExp(`\\b(except|exc\\.?|excluding)\\s+${escapeRegExp(sub)}\\b`, 'ig'), '');
         });
 
-        if (scrubLiter && literMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(literMatch[0])}\\b`, 'ig'), '');
-        if (scrubDrive && driveMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(driveMatch[0])}\\b`, 'ig'), '');
+        if (extractedLiter) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(literMatch[0])}\\b`, 'ig'), '');
+        if (extractedDrive) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(driveMatch[0])}\\b`, 'ig'), '');
+        // Only scrub the cylinder from notes if we successfully hard-filtered by it
         if (scrubCyl && cylMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(cylMatch[0])}\\b`, 'ig'), ''); 
 
         cleanNotes = cleanNotes.replace(/\b(?:w\/|with)\b/gi, ''); 
