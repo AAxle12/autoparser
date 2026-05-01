@@ -96,14 +96,15 @@
 
         <div class="section-title">Static Job Details</div>
         <div class="form-grid">
-            <div class="form-group"><label>Agent Name</label><input type="text" id="agentName" placeholder="e.g. Faris"></div>
+            <div class="form-group"><label>Agent Name</label><input type="text" id="agentName" value="Faris" placeholder="e.g. Faris"></div>
             <div class="form-group"><label>Part Number</label><input type="text" id="partNum" placeholder="e.g. P-1053"></div>
         </div>
 
         <div class="section-title">Raw Fitment Data</div>
         <div class="form-group">
             <label>Paste Text Block Here</label>
-            <textarea id="rawFitment" class="raw-fitment" placeholder="Paste callouts here..."></textarea>
+            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2005 CHRYSLER 300 6.1L hemi"></textarea>
+            <span style="font-size: 10px; color: #888; margin-top: 5px;">Soft-Fallback Active: Unmatched attributes and submodels are automatically preserved in Notes!</span>
             <div id="error-log"></div>
         </div>
 
@@ -142,7 +143,7 @@
     <div class="table-container">
         <div class="toolbar">
             <div style="font-weight: bold; color: var(--da-black); font-size: 14px;">GENERATED FITMENT DATA</div>
-            <div style="font-size: 12px; color: #666;">Data is perfectly aligned for direct copy-pasting into your Master Sheet.</div>
+            <div style="font-size: 12px; color: #666;">Data is aligned for direct copy-pasting. Attributes are filtered and scrubbed efficiently.</div>
         </div>
         <div id="fitment-table"></div>
     </div>
@@ -154,7 +155,6 @@
 </div>
 
 <script>
-// REORDERED COLUMNS TO PERFECTLY MATCH FARIS' EXCEL SHEET
 const TABLE_COLUMNS = [
     {title: "Date", field: "Date", editor: "input", width: 90},
     {title: "Agent Name", field: "Agent Name", editor: "input", width: 100},
@@ -171,7 +171,7 @@ const TABLE_COLUMNS = [
     {title: "Source Link", field: "Link1", editor: "input", width: 150},
     {title: "Source Link 2", field: "Link2", editor: "input", width: 150},
     {title: "Source Link 3", field: "Link3", editor: "input", width: 150},
-    {title: "Rear Brakes (Auto)", field: "RearBrakes", editor: "input", width: 150, cssClass: "col-auto-highlight"} // Kept at the end so it doesn't interrupt your main paste flow
+    {title: "Rear Brakes (Auto)", field: "RearBrakes", editor: "input", width: 150, cssClass: "col-auto-highlight"}
 ];
 
 let table = new Tabulator("#fitment-table", {
@@ -209,7 +209,7 @@ document.getElementById('db-upload').addEventListener('change', function(e) {
 
     const isCSV = file.name.toLowerCase().endsWith('.csv');
     document.getElementById('loading').style.display = 'flex';
-    document.getElementById('loading-msg').innerText = "BUILDING STRICT DICTIONARY...";
+    document.getElementById('loading-msg').innerText = "BUILDING OMNI-DICTIONARY...";
 
     if (isCSV) {
         Papa.parse(file, {
@@ -246,8 +246,9 @@ function buildCompressedTree(data) {
     let kDrive = keys.find(k => k.toLowerCase() === 'drive type') || keys.find(k => k.toLowerCase().includes('drive')) || "";
     let kRegion = keys.find(k => k.toLowerCase() === 'region') || keys.find(k => k.toLowerCase().includes('region')) || "";
     let kRearBrake = keys.find(k => k.toLowerCase().includes('drum/disc')) || keys.find(k => k.toLowerCase().includes('rear brake')) || "";
-    let kBody = keys.find(k => k.toLowerCase() === 'body type' || k.toLowerCase() === 'body type name') || keys.find(k => k.toLowerCase().includes('body')) || "";
-    let kCyl = keys.find(k => k.toLowerCase() === 'cyl' || k.toLowerCase() === 'cylinders') || "";
+    
+    let standardKeys = [kMake, kModel, kYear, kSub, kLiter, kDrive, kRegion, kRearBrake].map(k => k.toLowerCase());
+    let auxKeys = keys.filter(k => !standardKeys.includes(k.toLowerCase()) && !/date|agent|part|position|link|notes/i.test(k));
 
     if (!kMake || !kModel || !kYear) {
         document.getElementById('loading').style.display = 'none';
@@ -266,12 +267,16 @@ function buildCompressedTree(data) {
         let driveNorm = normalizeDrive(kDrive ? String(row[kDrive]).trim() : "");
         let regionNorm = kRegion ? String(row[kRegion]).trim() : "";
         let brakeNorm = kRearBrake ? String(row[kRearBrake]).trim() : "";
-        let bodyNorm = kBody ? String(row[kBody]).trim() : "";
-        let cylNorm = kCyl ? String(row[kCyl]).trim() : "";
         
         let literVal = kLiter ? String(row[kLiter]).trim() : "";
         let parsedL = parseFloat(literVal);
         let literNorm = !isNaN(parsedL) ? parsedL.toFixed(1) : literVal; 
+
+        let dynamicAttrs = [];
+        auxKeys.forEach(k => {
+            let val = String(row[k] || "").trim();
+            if (val && val.length > 1) dynamicAttrs.push(val);
+        });
 
         if (!mk || !md || !yr) continue;
 
@@ -285,15 +290,14 @@ function buildCompressedTree(data) {
             drive: driveNorm, 
             region: regionNorm,
             brake: brakeNorm,
-            body: bodyNorm,
-            cyl: cylNorm
+            attrs: dynamicAttrs 
         });
     }
 
     knownMakes = Object.keys(dbTree).sort((a,b) => b.length - a.length);
     data = null; 
 
-    document.getElementById('upload-txt').innerText = `✓ FULL-PROFILE DICTIONARY LOADED`;
+    document.getElementById('upload-txt').innerText = `✓ OMNI-CATALOG LOADED`;
     document.getElementById('upload-txt').style.color = 'var(--da-red)';
     document.getElementById('loading').style.display = 'none';
 }
@@ -362,15 +366,13 @@ function parseAndGenerate() {
             else if (s.includes('12')) extractedCyl = "12";
         }
 
-        let bodyMatch = remainderUpper.match(/\b(COUPE|SEDAN|HATCHBACK|CONVERTIBLE|WAGON|SUV|VAN|MINIVAN|CREW CAB|EXTENDED CAB|REGULAR CAB|QUAD CAB|MEGA CAB)\b/i);
-        let extractedBody = bodyMatch ? bodyMatch[1] : "";
-
         let foundMake = "";
+        let originalRemainderMake = remainderUpper;
         for(let m of knownMakes) {
             let makeRegex = new RegExp(`^${escapeRegExp(m)}\\b`, 'i');
-            if(makeRegex.test(remainderUpper)) { 
+            if(makeRegex.test(originalRemainderMake)) { 
                 foundMake = m; 
-                remainderUpper = remainderUpper.replace(makeRegex, '').trim(); 
+                remainderUpper = originalRemainderMake.replace(makeRegex, '').trim(); 
                 remainderOriginal = remainderOriginal.replace(makeRegex, '').trim();
                 break; 
             }
@@ -381,12 +383,14 @@ function parseAndGenerate() {
             return;
         }
 
+        let modelSearchString = remainderUpper.replace(/\b(VAN|TRUCK|PICKUP)\b/ig, ' ').replace(/\s+/g, ' ').trim();
+
         let knownModels = Object.keys(dbTree[foundMake]);
         let possibleModels = [];
         
         for(let md of knownModels) {
             let regex = new RegExp(`\\b${escapeRegExp(md)}\\b`, 'i');
-            if(regex.test(remainderUpper)) {
+            if(regex.test(modelSearchString)) {
                 possibleModels.push(md);
             }
         }
@@ -415,81 +419,80 @@ function parseAndGenerate() {
         let displayModel = foundModel.split(' ').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
 
         let availableVehicles = dbTree[foundMake][foundModel][year] || [];
-        
+        let cleanNotes = remainderOriginal; 
+
+        // --- THE SOFT-FALLBACK MATCHER ---
+        // Variables track whether a filter was successfully applied.
+        // If not applied, the text safely stays in 'cleanNotes'.
+
+        let scrubLiter = false;
         if (extractedLiter) {
             let filtered = availableVehicles.filter(v => v.liter === extractedLiter);
-            if (filtered.length === 0) {
-                let trueLiters = [...new Set(availableVehicles.map(v=>v.liter))].filter(Boolean).join(' or ');
-                errorLogs.push(`[Line ${lineNum}] Skipped: Mismatch! Text asked for ${extractedLiter}L, but catalog says ${displayModel} is [${trueLiters || 'N/A'}L].`);
-                failedLines.push(originalLine);
-                return;
+            if (filtered.length > 0) {
+                availableVehicles = filtered;
+                scrubLiter = true;
             }
-            availableVehicles = filtered;
         }
 
+        let scrubDrive = false;
         if (extractedDrive) {
             let filtered = availableVehicles.filter(v => v.drive === extractedDrive);
-            if (filtered.length === 0) {
-                let trueDrives = [...new Set(availableVehicles.map(v=>v.drive))].filter(Boolean).join(' or ');
-                errorLogs.push(`[Line ${lineNum}] Skipped: Mismatch! Text asked for ${extractedDrive}, but catalog says ${displayModel} is [${trueDrives || 'N/A'}].`);
-                failedLines.push(originalLine);
-                return;
+            if (filtered.length > 0) {
+                availableVehicles = filtered;
+                scrubDrive = true;
             }
-            availableVehicles = filtered;
         }
         
+        let scrubCyl = false;
         if (extractedCyl) {
             let filtered = availableVehicles.filter(v => v.cyl === extractedCyl);
-            if (filtered.length === 0) {
-                let trueCyls = [...new Set(availableVehicles.map(v=>v.cyl))].filter(Boolean).join(' or ');
-                errorLogs.push(`[Line ${lineNum}] Skipped: Mismatch! Text asked for ${extractedCyl} Cyl, but catalog says ${displayModel} is [${trueCyls || 'N/A'}].`);
-                failedLines.push(originalLine);
-                return;
+            if (filtered.length > 0) {
+                availableVehicles = filtered;
+                scrubCyl = true;
             }
-            availableVehicles = filtered;
         }
 
-        if (extractedBody) {
-            let filtered = availableVehicles.filter(v => 
-                (v.body && v.body.toUpperCase().includes(extractedBody.toUpperCase())) ||
-                (v.sub && v.sub.toUpperCase().includes(extractedBody.toUpperCase()))
-            );
-            if (filtered.length === 0) {
-                errorLogs.push(`[Line ${lineNum}] Skipped: Mismatch! Text asked for a ${extractedBody}, but catalog doesn't have it for ${year} ${displayMake} ${displayModel}.`);
-                failedLines.push(originalLine);
-                return;
+        let allAvailableAttrs = new Set();
+        availableVehicles.forEach(v => {
+            if(v.attrs) v.attrs.forEach(a => allAvailableAttrs.add(a.toUpperCase()));
+        });
+        let sortedAttrs = [...allAvailableAttrs].sort((a,b) => b.length - a.length);
+
+        let validDynamicAttrs = [];
+        sortedAttrs.forEach(attr => {
+            let attrRegex = new RegExp(`\\b${escapeRegExp(attr)}\\b`, 'i');
+            if(attrRegex.test(cleanNotes)) {
+                let filtered = availableVehicles.filter(v => v.attrs && v.attrs.some(a => a.toUpperCase() === attr.toUpperCase()));
+                if(filtered.length > 0) {
+                    availableVehicles = filtered;
+                    validDynamicAttrs.push(attrRegex);
+                }
             }
-            availableVehicles = filtered;
-        }
+        });
 
         let allSubsForModel = new Set();
         for(let y in dbTree[foundMake][foundModel]) {
             dbTree[foundMake][foundModel][y].forEach(v => allSubsForModel.add(v.sub.toUpperCase()));
         }
-        
-        let cleanNotes = remainderOriginal; 
 
         let regexToRemove = new RegExp(`\\b${escapeRegExp(foundModel)}\\b`, 'ig');
         cleanNotes = cleanNotes.replace(regexToRemove, ' ').trim();
+        cleanNotes = cleanNotes.replace(/\b(VAN|TRUCK|PICKUP)\b/ig, ' ').trim();
 
         for (let alias of possibleModels) {
-            if (alias !== foundModel) {
-                if (!allSubsForModel.has(alias.toUpperCase())) {
-                    let aliasRegex = new RegExp(`\\b${escapeRegExp(alias)}\\b`, 'ig');
-                    cleanNotes = cleanNotes.replace(aliasRegex, ' ').trim();
-                }
+            if (alias !== foundModel && !allSubsForModel.has(alias.toUpperCase())) {
+                let aliasRegex = new RegExp(`\\b${escapeRegExp(alias)}\\b`, 'ig');
+                cleanNotes = cleanNotes.replace(aliasRegex, ' ').trim();
             }
         }
 
         let allSubsArray = [...allSubsForModel].filter(s => s).sort((a,b) => b.length - a.length);
-
-        let maskedForSubs = cleanNotes;
-        if (cylMatch) maskedForSubs = maskedForSubs.replace(new RegExp(`\\b${escapeRegExp(cylMatch[0])}\\b`, 'ig'), '');
-        if (bodyMatch) maskedForSubs = maskedForSubs.replace(new RegExp(`\\b${escapeRegExp(bodyMatch[0])}\\b`, 'ig'), '');
+        let maskedForSubs = cleanNotes; 
 
         let mentionedSubs = [];
         let excludedSubs = [];
 
+        // Identifies all possible Submodels in the text
         allSubsArray.forEach(sub => {
             let escapedSub = escapeRegExp(sub);
             let boundaryBefore = `(^|[\\s,;\\/\\(\\)\\-])`;
@@ -505,35 +508,35 @@ function parseAndGenerate() {
             }
         });
 
-        if (mentionedSubs.length > 0) {
-            let matchedAvailable = availableVehicles.filter(v => mentionedSubs.some(m => m.toUpperCase() === v.sub.toUpperCase()));
-            if (matchedAvailable.length === 0) {
-                errorLogs.push(`[Line ${lineNum}] Skipped: ${year} ${displayMake} ${displayModel} does not have submodel(s) "${mentionedSubs.join(', ')}" in the catalog for this configuration.`);
-                failedLines.push(originalLine);
-                return;
-            }
-            availableVehicles = matchedAvailable;
+        // Soft Fallback: Only keep the submodels that ACTUALLY exist in the remaining vehicle list
+        let validMentionedSubs = mentionedSubs.filter(sub => availableVehicles.some(v => v.sub.toUpperCase() === sub.toUpperCase()));
+        let validExcludedSubs = excludedSubs.filter(sub => availableVehicles.some(v => v.sub.toUpperCase() === sub.toUpperCase()));
+
+        if (validMentionedSubs.length > 0) {
+            availableVehicles = availableVehicles.filter(v => validMentionedSubs.some(m => m.toUpperCase() === v.sub.toUpperCase()));
+        }
+        if (validExcludedSubs.length > 0) {
+            availableVehicles = availableVehicles.filter(v => !validExcludedSubs.some(m => m.toUpperCase() === v.sub.toUpperCase()));
         }
 
-        if (excludedSubs.length > 0) {
-            availableVehicles = availableVehicles.filter(v => !excludedSubs.some(m => m.toUpperCase() === v.sub.toUpperCase()));
-            if (availableVehicles.length === 0) {
-                errorLogs.push(`[Line ${lineNum}] Skipped: Submodel exclusions removed all vehicles for ${year} ${displayMake} ${displayModel}.`);
-                failedLines.push(originalLine);
-                return;
-            }
-        }
-
-        if (literMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(literMatch[0])}\\b`, 'ig'), '');
-        if (driveMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(driveMatch[0])}\\b`, 'ig'), '');
-        if (cylMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(cylMatch[0])}\\b`, 'ig'), ''); 
+        // --- FINAL SCRUBBER ---
+        // ONLY scrubs the attributes and submodels that were officially confirmed and used as filters!
+        // Everything else stays in the notes exactly as requested.
         
-        mentionedSubs.forEach(sub => {
+        validDynamicAttrs.forEach(regex => {
+            cleanNotes = cleanNotes.replace(regex, ' ');
+        });
+
+        validMentionedSubs.forEach(sub => {
             cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(sub)}\\b`, 'ig'), '');
         });
-        excludedSubs.forEach(sub => {
+        validExcludedSubs.forEach(sub => {
             cleanNotes = cleanNotes.replace(new RegExp(`\\b(except|exc\\.?|excluding)\\s+${escapeRegExp(sub)}\\b`, 'ig'), '');
         });
+
+        if (scrubLiter && literMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(literMatch[0])}\\b`, 'ig'), '');
+        if (scrubDrive && driveMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(driveMatch[0])}\\b`, 'ig'), '');
+        if (scrubCyl && cylMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(cylMatch[0])}\\b`, 'ig'), ''); 
 
         cleanNotes = cleanNotes.replace(/\b(?:w\/|with)\b/gi, ''); 
         cleanNotes = cleanNotes.replace(/^[-\/;,() ]+|[-\/;,() ]+$/g, ''); 
@@ -543,7 +546,7 @@ function parseAndGenerate() {
         let uniqueVehicleProfiles = [];
         let seenSet = new Set();
         availableVehicles.forEach(v => {
-            let key = `${v.sub}|${v.liter}|${v.drive}|${v.brake}|${v.region}|${v.body}`;
+            let key = `${v.sub}|${v.liter}|${v.drive}|${v.brake}|${v.region}`;
             if(!seenSet.has(key)) { seenSet.add(key); uniqueVehicleProfiles.push(v); }
         });
 
@@ -617,7 +620,6 @@ function copyData() {
     const rawData = table.getData();
     if(rawData.length === 0) return alert("Table is empty. Nothing to copy.");
 
-    // EXCLUDE HEADERS FOR THE CLIPBOARD COPY
     const exportHeaders = TABLE_COLUMNS.map(c => c.field);
     
     let tsvString = "";
