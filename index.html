@@ -84,7 +84,7 @@
         <button class="btn-green" id="copyBtn" onclick="copyData()" style="width: auto; padding: 10px 20px;">📋 COPY DATA</button>
         <button class="btn-blue" onclick="exportData()" style="width: auto; padding: 10px 20px;">⬇ EXPORT EXCEL</button>
     </div>
-</header>s
+</header>
 
 <div class="main-layout">
     <div class="generator-panel">
@@ -103,8 +103,7 @@
         <div class="section-title">Raw Fitment Data</div>
         <div class="form-group">
             <label>Paste Text Block Here</label>
-            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2005 HONDA ACCORD Coupe 4 Cylinder&#10;2005 HONDA ACCORD Coupe V6"></textarea>
-            <span style="font-size: 10px; color: #888; margin-top: 5px;">Cylinders will filter the DB and then automatically delete themselves from your Callouts!</span>
+            <textarea id="rawFitment" class="raw-fitment" placeholder="Paste callouts here..."></textarea>
             <div id="error-log"></div>
         </div>
 
@@ -143,7 +142,7 @@
     <div class="table-container">
         <div class="toolbar">
             <div style="font-weight: bold; color: var(--da-black); font-size: 14px;">GENERATED FITMENT DATA</div>
-            <div style="font-size: 12px; color: #666;">Liter, Drive, Region, and Rear Brakes are automatically pulled from the catalog and mapped.</div>
+            <div style="font-size: 12px; color: #666;">Data is perfectly aligned for direct copy-pasting into your Master Sheet.</div>
         </div>
         <div id="fitment-table"></div>
     </div>
@@ -155,6 +154,7 @@
 </div>
 
 <script>
+// REORDERED COLUMNS TO PERFECTLY MATCH FARIS' EXCEL SHEET
 const TABLE_COLUMNS = [
     {title: "Date", field: "Date", editor: "input", width: 90},
     {title: "Agent Name", field: "Agent Name", editor: "input", width: 100},
@@ -163,15 +163,15 @@ const TABLE_COLUMNS = [
     {title: "Model", field: "Model", editor: "input", width: 150},
     {title: "Year", field: "Year", editor: "input", width: 70},
     {title: "Sub-Model", field: "Sub-Model", editor: "input", width: 160},
-    {title: "Liter (Auto)", field: "Liter", editor: "input", width: 90, cssClass: "col-auto-highlight"},
-    {title: "Drive Type (Auto)", field: "Drive Type", editor: "input", width: 120, cssClass: "col-auto-highlight"},
+    {title: "Liter (if it matter)", field: "Liter", editor: "input", width: 130, cssClass: "col-auto-highlight"},
+    {title: "Region (if it matter)", field: "Region", editor: "input", width: 140},
+    {title: "Drive Type (if it matter)", field: "Drive Type", editor: "input", width: 160, cssClass: "col-auto-highlight"},
     {title: "Notes/Callouts", field: "Notes", editor: "input", width: 250},
-    {title: "Region", field: "Region", editor: "input", width: 110},
     {title: "Position", field: "Position", editor: "input", width: 100},
     {title: "Source Link", field: "Link1", editor: "input", width: 150},
     {title: "Source Link 2", field: "Link2", editor: "input", width: 150},
     {title: "Source Link 3", field: "Link3", editor: "input", width: 150},
-    {title: "Rear Brakes (Auto)", field: "RearBrakes", editor: "input", width: 150, cssClass: "col-auto-highlight"}
+    {title: "Rear Brakes (Auto)", field: "RearBrakes", editor: "input", width: 150, cssClass: "col-auto-highlight"} // Kept at the end so it doesn't interrupt your main paste flow
 ];
 
 let table = new Tabulator("#fitment-table", {
@@ -366,12 +366,12 @@ function parseAndGenerate() {
         let extractedBody = bodyMatch ? bodyMatch[1] : "";
 
         let foundMake = "";
-        let originalRemainderMake = remainderUpper;
         for(let m of knownMakes) {
-            if(originalRemainderMake.startsWith(m)) { 
+            let makeRegex = new RegExp(`^${escapeRegExp(m)}\\b`, 'i');
+            if(makeRegex.test(remainderUpper)) { 
                 foundMake = m; 
-                remainderUpper = originalRemainderMake.substring(m.length).trim(); 
-                remainderOriginal = remainderOriginal.substring(m.length).trim();
+                remainderUpper = remainderUpper.replace(makeRegex, '').trim(); 
+                remainderOriginal = remainderOriginal.replace(makeRegex, '').trim();
                 break; 
             }
         }
@@ -381,19 +381,25 @@ function parseAndGenerate() {
             return;
         }
 
-        let knownModels = Object.keys(dbTree[foundMake]).sort((a,b) => b.length - a.length);
-        let foundModel = "";
-        let fallbackModel = "";
+        let knownModels = Object.keys(dbTree[foundMake]);
+        let possibleModels = [];
         
         for(let md of knownModels) {
-            if(remainderUpper.startsWith(md)) { 
-                if(!fallbackModel) fallbackModel = md; 
-                if(dbTree[foundMake][md] && dbTree[foundMake][md][year]) {
-                    foundModel = md; 
-                    remainderUpper = remainderUpper.substring(md.length).trim(); 
-                    remainderOriginal = remainderOriginal.substring(md.length).trim();
-                    break; 
-                }
+            let regex = new RegExp(`\\b${escapeRegExp(md)}\\b`, 'i');
+            if(regex.test(remainderUpper)) {
+                possibleModels.push(md);
+            }
+        }
+        
+        possibleModels.sort((a,b) => b.length - a.length);
+
+        let foundModel = "";
+        let fallbackModel = possibleModels.length > 0 ? possibleModels[0] : "";
+        
+        for(let md of possibleModels) {
+            if(dbTree[foundMake][md] && dbTree[foundMake][md][year]) {
+                foundModel = md; 
+                break; 
             }
         }
 
@@ -458,15 +464,26 @@ function parseAndGenerate() {
 
         let allSubsForModel = new Set();
         for(let y in dbTree[foundMake][foundModel]) {
-            dbTree[foundMake][foundModel][y].forEach(v => allSubsForModel.add(v.sub));
+            dbTree[foundMake][foundModel][y].forEach(v => allSubsForModel.add(v.sub.toUpperCase()));
         }
+        
+        let cleanNotes = remainderOriginal; 
+
+        let regexToRemove = new RegExp(`\\b${escapeRegExp(foundModel)}\\b`, 'ig');
+        cleanNotes = cleanNotes.replace(regexToRemove, ' ').trim();
+
+        for (let alias of possibleModels) {
+            if (alias !== foundModel) {
+                if (!allSubsForModel.has(alias.toUpperCase())) {
+                    let aliasRegex = new RegExp(`\\b${escapeRegExp(alias)}\\b`, 'ig');
+                    cleanNotes = cleanNotes.replace(aliasRegex, ' ').trim();
+                }
+            }
+        }
+
         let allSubsArray = [...allSubsForModel].filter(s => s).sort((a,b) => b.length - a.length);
 
-        let cleanNotes = remainderOriginal; 
-        let regexRepeatedModel = new RegExp(`\\b${escapeRegExp(foundModel)}\\b`, 'ig');
-        cleanNotes = cleanNotes.replace(regexRepeatedModel, ' ');
-
-        let maskedForSubs = remainderOriginal;
+        let maskedForSubs = cleanNotes;
         if (cylMatch) maskedForSubs = maskedForSubs.replace(new RegExp(`\\b${escapeRegExp(cylMatch[0])}\\b`, 'ig'), '');
         if (bodyMatch) maskedForSubs = maskedForSubs.replace(new RegExp(`\\b${escapeRegExp(bodyMatch[0])}\\b`, 'ig'), '');
 
@@ -489,7 +506,7 @@ function parseAndGenerate() {
         });
 
         if (mentionedSubs.length > 0) {
-            let matchedAvailable = availableVehicles.filter(v => mentionedSubs.includes(v.sub));
+            let matchedAvailable = availableVehicles.filter(v => mentionedSubs.some(m => m.toUpperCase() === v.sub.toUpperCase()));
             if (matchedAvailable.length === 0) {
                 errorLogs.push(`[Line ${lineNum}] Skipped: ${year} ${displayMake} ${displayModel} does not have submodel(s) "${mentionedSubs.join(', ')}" in the catalog for this configuration.`);
                 failedLines.push(originalLine);
@@ -499,7 +516,7 @@ function parseAndGenerate() {
         }
 
         if (excludedSubs.length > 0) {
-            availableVehicles = availableVehicles.filter(v => !excludedSubs.includes(v.sub));
+            availableVehicles = availableVehicles.filter(v => !excludedSubs.some(m => m.toUpperCase() === v.sub.toUpperCase()));
             if (availableVehicles.length === 0) {
                 errorLogs.push(`[Line ${lineNum}] Skipped: Submodel exclusions removed all vehicles for ${year} ${displayMake} ${displayModel}.`);
                 failedLines.push(originalLine);
@@ -526,7 +543,7 @@ function parseAndGenerate() {
         let uniqueVehicleProfiles = [];
         let seenSet = new Set();
         availableVehicles.forEach(v => {
-            let key = `${v.sub}|${v.liter}|${v.drive}|${v.brake}|${v.region}`;
+            let key = `${v.sub}|${v.liter}|${v.drive}|${v.brake}|${v.region}|${v.body}`;
             if(!seenSet.has(key)) { seenSet.add(key); uniqueVehicleProfiles.push(v); }
         });
 
@@ -596,18 +613,17 @@ function exportData() {
     XLSX.writeFile(wb, `Fitment_Batch_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
-// NEW FUNCTION: Copies table data directly to clipboard without headers
 function copyData() {
     const rawData = table.getData();
     if(rawData.length === 0) return alert("Table is empty. Nothing to copy.");
 
+    // EXCLUDE HEADERS FOR THE CLIPBOARD COPY
     const exportHeaders = TABLE_COLUMNS.map(c => c.field);
     
     let tsvString = "";
     rawData.forEach((row, index) => {
         let rowArray = exportHeaders.map(h => {
             let cellValue = row[h] === undefined || row[h] === null ? "" : String(row[h]);
-            // Clean up any stray newlines or tabs to prevent breaking the Excel grid
             return cellValue.replace(/\t/g, ' ').replace(/\n/g, ' '); 
         });
         tsvString += rowArray.join('\t') + (index < rawData.length - 1 ? '\n' : '');
@@ -617,10 +633,10 @@ function copyData() {
         const copyBtn = document.getElementById('copyBtn');
         const originalText = copyBtn.innerText;
         copyBtn.innerText = "✓ COPIED!";
-        copyBtn.style.backgroundColor = "#1e8449"; // Darker green on success
+        copyBtn.style.backgroundColor = "#1e8449"; 
         setTimeout(() => {
             copyBtn.innerText = originalText;
-            copyBtn.style.backgroundColor = "#27ae60"; // Reset to standard green
+            copyBtn.style.backgroundColor = "#27ae60"; 
         }, 2000);
     }).catch(err => {
         console.error('Could not copy text: ', err);
