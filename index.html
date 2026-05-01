@@ -103,8 +103,8 @@
         <div class="section-title">Raw Fitment Data</div>
         <div class="form-group">
             <label>Paste Text Block Here</label>
-            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2005 CHRYSLER 300 6.1L hemi"></textarea>
-            <span style="font-size: 10px; color: #888; margin-top: 5px;">Soft-Fallback Active: Unmatched attributes and submodels are automatically preserved in Notes!</span>
+            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2005 CHRYSLER 300 SRT8"></textarea>
+            <span style="font-size: 10px; color: #888; margin-top: 5px;">Fragment Matcher Active: Maps "SRT8" safely to "C SRT8" and auto-filters out incorrect engines!</span>
             <div id="error-log"></div>
         </div>
 
@@ -421,10 +421,26 @@ function parseAndGenerate() {
         let availableVehicles = dbTree[foundMake][foundModel][year] || [];
         let cleanNotes = remainderOriginal; 
 
-        // --- THE SOFT-FALLBACK MATCHER ---
-        // Variables track whether a filter was successfully applied.
-        // If not applied, the text safely stays in 'cleanNotes'.
+        // Apply Omni-Attributes filter (Soft Fallback)
+        let allAvailableAttrs = new Set();
+        availableVehicles.forEach(v => {
+            if(v.attrs) v.attrs.forEach(a => allAvailableAttrs.add(a.toUpperCase()));
+        });
+        let sortedAttrs = [...allAvailableAttrs].sort((a,b) => b.length - a.length);
 
+        let validDynamicAttrs = [];
+        sortedAttrs.forEach(attr => {
+            let attrRegex = new RegExp(`\\b${escapeRegExp(attr)}\\b`, 'i');
+            if(attrRegex.test(cleanNotes)) {
+                let filtered = availableVehicles.filter(v => v.attrs && v.attrs.some(a => a.toUpperCase() === attr.toUpperCase()));
+                if(filtered.length > 0) {
+                    availableVehicles = filtered;
+                    validDynamicAttrs.push(attrRegex);
+                }
+            }
+        });
+
+        // Track what successfully filtered the list so we can scrub it later
         let scrubLiter = false;
         if (extractedLiter) {
             let filtered = availableVehicles.filter(v => v.liter === extractedLiter);
@@ -452,24 +468,6 @@ function parseAndGenerate() {
             }
         }
 
-        let allAvailableAttrs = new Set();
-        availableVehicles.forEach(v => {
-            if(v.attrs) v.attrs.forEach(a => allAvailableAttrs.add(a.toUpperCase()));
-        });
-        let sortedAttrs = [...allAvailableAttrs].sort((a,b) => b.length - a.length);
-
-        let validDynamicAttrs = [];
-        sortedAttrs.forEach(attr => {
-            let attrRegex = new RegExp(`\\b${escapeRegExp(attr)}\\b`, 'i');
-            if(attrRegex.test(cleanNotes)) {
-                let filtered = availableVehicles.filter(v => v.attrs && v.attrs.some(a => a.toUpperCase() === attr.toUpperCase()));
-                if(filtered.length > 0) {
-                    availableVehicles = filtered;
-                    validDynamicAttrs.push(attrRegex);
-                }
-            }
-        });
-
         let allSubsForModel = new Set();
         for(let y in dbTree[foundMake][foundModel]) {
             dbTree[foundMake][foundModel][y].forEach(v => allSubsForModel.add(v.sub.toUpperCase()));
@@ -492,7 +490,7 @@ function parseAndGenerate() {
         let mentionedSubs = [];
         let excludedSubs = [];
 
-        // Identifies all possible Submodels in the text
+        // 1. EXACT SUBMODEL MATCHING (Handles spaces perfectly because allSubsArray is sorted by length)
         allSubsArray.forEach(sub => {
             let escapedSub = escapeRegExp(sub);
             let boundaryBefore = `(^|[\\s,;\\/\\(\\)\\-])`;
@@ -508,7 +506,28 @@ function parseAndGenerate() {
             }
         });
 
-        // Soft Fallback: Only keep the submodels that ACTUALLY exist in the remaining vehicle list
+        // 2. FRAGMENT SUBMODEL MATCHER (Bridges 'SRT8' to 'C SRT8')
+        if (mentionedSubs.length === 0 && excludedSubs.length === 0) {
+            allSubsArray.forEach(sub => {
+                // Splits catalog submodel 'C SRT8' into ['C', 'SRT8']
+                let parts = sub.split(/[\s\-]+/);
+                let matched = false;
+                parts.forEach(part => {
+                    // Requires fragments to be at least 2 letters (ignores 'C' alone, but matches 'SRT8')
+                    if (part.length >= 2) {
+                        let partRegex = new RegExp(`\\b${escapeRegExp(part)}\\b`, 'i');
+                        if (partRegex.test(maskedForSubs)) {
+                            matched = true;
+                        }
+                    }
+                });
+                if (matched) {
+                    mentionedSubs.push(sub);
+                }
+            });
+        }
+
+        // Apply filters based on matched submodels
         let validMentionedSubs = mentionedSubs.filter(sub => availableVehicles.some(v => v.sub.toUpperCase() === sub.toUpperCase()));
         let validExcludedSubs = excludedSubs.filter(sub => availableVehicles.some(v => v.sub.toUpperCase() === sub.toUpperCase()));
 
@@ -520,18 +539,30 @@ function parseAndGenerate() {
         }
 
         // --- FINAL SCRUBBER ---
-        // ONLY scrubs the attributes and submodels that were officially confirmed and used as filters!
-        // Everything else stays in the notes exactly as requested.
-        
         validDynamicAttrs.forEach(regex => {
             cleanNotes = cleanNotes.replace(regex, ' ');
         });
 
         validMentionedSubs.forEach(sub => {
+            // Scrubs exact submodel matches
             cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(sub)}\\b`, 'ig'), '');
+            // Scrubs submodel fragments (e.g. removes "SRT8" if "C SRT8" was matched)
+            let parts = sub.split(/[\s\-]+/);
+            parts.forEach(part => {
+                if(part.length >= 2) {
+                    cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(part)}\\b`, 'ig'), '');
+                }
+            });
         });
+        
         validExcludedSubs.forEach(sub => {
             cleanNotes = cleanNotes.replace(new RegExp(`\\b(except|exc\\.?|excluding)\\s+${escapeRegExp(sub)}\\b`, 'ig'), '');
+            let parts = sub.split(/[\s\-]+/);
+            parts.forEach(part => {
+                if(part.length >= 2) {
+                    cleanNotes = cleanNotes.replace(new RegExp(`\\b(except|exc\\.?|excluding)\\s+${escapeRegExp(part)}\\b`, 'ig'), '');
+                }
+            });
         });
 
         if (scrubLiter && literMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(literMatch[0])}\\b`, 'ig'), '');
