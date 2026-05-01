@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Detroit Axle | Fitment Auto-Parser</title>
+    
+    <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator_modern.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+    <style>
+        :root { 
+            --da-red: #D31145;      
+            --da-black: #1A1A1A;    
+            --da-gray: #E0E0E0;     
+            --da-blue: #0079ad;
+            --bg-light: #f4f6f9; 
+            --panel-bg: #ffffff;
+            --text-main: #333333;
+            --text-dim: #666666;
+            --border-color: #d1d5db;
+            --danger-light: #fff5f5;
+        }
+        
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background: var(--bg-light); color: var(--text-main); display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        
+        header { background: var(--da-black); padding: 15px 25px; display: flex; justify-content: space-between; align-items: center; border-bottom: 4px solid var(--da-red); box-shadow: 0 4px 10px rgba(0,0,0,0.1); z-index: 100; }
+        .logo { font-size: 1.4rem; font-weight: bold; letter-spacing: 1px; color: #fff; }
+        .logo span { color: var(--da-red); font-weight: 300; }
+
+        .main-layout { display: flex; flex: 1; overflow: hidden; }
+        
+        .generator-panel { width: 450px; background: var(--panel-bg); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; overflow-y: auto; padding: 20px; box-sizing: border-box; box-shadow: 2px 0 10px rgba(0,0,0,0.05); z-index: 10;}
+        
+        .upload-box { background: #f0f7fa; border: 2px dashed var(--da-blue); padding: 15px; text-align: center; border-radius: 8px; cursor: pointer; transition: 0.3s; margin-bottom: 20px; }
+        .upload-box:hover { background: #e0f0f7; }
+        .upload-box span { color: var(--da-blue); font-weight: bold; font-size: 13px; }
+
+        .section-title { font-size: 12px; text-transform: uppercase; color: var(--da-red); font-weight: bold; margin: 15px 0 10px 0; border-bottom: 2px solid var(--da-gray); padding-bottom: 5px; }
+
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+        .form-group { display: flex; flex-direction: column; }
+        
+        label { font-size: 11px; color: var(--text-dim); font-weight: bold; margin-bottom: 4px; text-transform: uppercase; }
+        input, select, textarea { background: #fff; color: #111; border: 1px solid var(--border-color); padding: 10px; border-radius: 4px; font-size: 13px; outline: none; transition: 0.3s; font-family: 'Segoe UI', sans-serif;}
+        input:focus, select:focus, textarea:focus { border-color: var(--da-blue); box-shadow: 0 0 0 3px rgba(0,121,173,0.1); }
+        
+        textarea.raw-fitment { min-height: 220px; font-family: monospace; font-size: 12px; line-height: 1.4; resize: vertical;}
+
+        #error-log { display: none; background: var(--danger-light); border: 1px solid var(--da-red); color: var(--da-red); padding: 10px; border-radius: 4px; font-size: 11px; margin-top: 10px; max-height: 150px; overflow-y: auto; font-family: monospace;}
+
+        button { cursor: pointer; padding: 12px; border: none; border-radius: 5px; font-weight: bold; color: white; transition: 0.2s; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 5px;}
+        button:hover { transform: translateY(-1px); filter: brightness(1.1); box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .btn-blue { background: var(--da-blue); width: 100%; }
+        .btn-red { background: var(--da-red); width: 100%; margin-top: 15px; padding: 15px; font-size: 14px; box-shadow: 0 4px 10px rgba(211, 17, 69, 0.2);}
+        .btn-dark { background: var(--da-black); }
+
+        .table-container { flex: 1; padding: 20px; display: flex; flex-direction: column; background: var(--bg-light); overflow: hidden; }
+        .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; background: #fff; padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 2px 4px rgba(0,0,0,0.02);}
+        
+        #fitment-table { flex: 1; border: 1px solid var(--border-color); font-size: 13px; border-radius: 6px; overflow: hidden; background: #fff; box-shadow: 0 4px 10px rgba(0,0,0,0.05);}
+        .tabulator .tabulator-header .tabulator-col { background-color: #f8f9fa !important; border-right: 1px solid var(--border-color) !important; border-bottom: 2px solid var(--da-red) !important;}
+        .tabulator .tabulator-header .tabulator-col-title { color: var(--da-black) !important; font-weight: bold !important; font-size: 12px !important; text-transform: uppercase;}
+        .tabulator-row { background-color: #fff; color: #333; border-bottom: 1px solid #eee;}
+        .tabulator-row:nth-child(even) { background-color: #fcfcfc; }
+        .tabulator-row:hover { background-color: #f0f7fa !important; }
+        .tabulator-row.tabulator-selected { background-color: #e6f3f9 !important; }
+
+        .tabulator-row .col-auto-highlight { background-color: #fff8e1 !important; font-weight: 600; border-right: 2px solid #ffe082 !important; color: #d35400;}
+
+        #loading { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.9); z-index: 999; color: var(--da-black); font-size: 20px; font-weight: bold; flex-direction: column; align-items: center; justify-content: center; backdrop-filter: blur(5px);}
+        .spinner { border: 5px solid rgba(0,121,173,0.1); border-top: 5px solid var(--da-blue); border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin-bottom: 15px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="logo">DETROIT <span>AXLE</span> | FITMENT AUTO-PARSER</div>
+    <div style="display: flex; gap: 10px;">
+        <button class="btn-dark" onclick="table.clearData()">🧹 CLEAR TABLE</button>
+        <button class="btn-blue" onclick="exportData()" style="width: auto; padding: 10px 20px;">⬇ EXPORT EXCEL</button>
+    </div>
+</header>
+
+<div class="main-layout">
+    <div class="generator-panel">
+        
+        <div class="upload-box" onclick="document.getElementById('db-upload').click()">
+            <span id="upload-txt">1. UPLOAD MASTER VEHICLE DB (.CSV)</span>
+            <input type="file" id="db-upload" style="display:none" accept=".csv, .xlsx, .xls">
+        </div>
+
+        <div class="section-title">Static Job Details</div>
+        <div class="form-grid">
+            <div class="form-group"><label>Agent Name</label><input type="text" id="agentName" placeholder="e.g. Caesar"></div>
+            <div class="form-group"><label>Part Number</label><input type="text" id="partNum" placeholder="e.g. P-1053"></div>
+        </div>
+
+        <div class="section-title">Raw Fitment Data</div>
+        <div class="form-group">
+            <label>Paste Text Block Here</label>
+            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2006 NISSAN ALTIMA except SE-R&#10;2005 HONDA CIVIC 2.0L"></textarea>
+            <div id="error-log"></div>
+        </div>
+
+        <div class="section-title">Global Identifiers (Optional)</div>
+        <div class="form-grid">
+            <div class="form-group">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                    <label style="margin-bottom:0;">Region</label>
+                    <label style="font-size:10px; color:var(--da-red); display:flex; align-items:center; gap:3px; cursor:pointer;">
+                        <input type="checkbox" id="lockRegion" style="margin:0; width:12px; height:12px; cursor:pointer;"> Lock (Override DB)
+                    </label>
+                </div>
+                <select id="regionVal">
+                    <option value="United States" selected>United States</option>
+                    <option value="Canada">Canada</option>
+                    <option value="Mexico">Mexico</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label>Position</label>
+                <input type="text" id="posVal" placeholder="e.g. Rear">
+            </div>
+        </div>
+
+        <div class="section-title">Source Links</div>
+        <div class="form-group" style="gap: 8px;">
+            <input type="text" id="link1" placeholder="Source Link 1">
+            <input type="text" id="link2" placeholder="Source Link 2">
+            <input type="text" id="link3" placeholder="Source Link 3">
+        </div>
+
+        <button class="btn-red" onclick="parseAndGenerate()">⚡ PARSE & GENERATE ROWS</button>
+    </div>
+
+    <div class="table-container">
+        <div class="toolbar">
+            <div style="font-weight: bold; color: var(--da-black); font-size: 14px;">GENERATED FITMENT DATA</div>
+            <div style="font-size: 12px; color: #666;">Liter, Drive, Region, and Rear Brakes are automatically pulled from the catalog and mapped.</div>
+        </div>
+        <div id="fitment-table"></div>
+    </div>
+</div>
+
+<div id="loading">
+    <div class="spinner"></div>
+    <div id="loading-msg">PROCESSING MASTER DB...</div>
+</div>
+
+<script>
+const TABLE_COLUMNS = [
+    {title: "Date", field: "Date", editor: "input", width: 90},
+    {title: "Agent Name", field: "Agent Name", editor: "input", width: 100},
+    {title: "Part#", field: "Part#", editor: "input", width: 100},
+    {title: "Make", field: "Make", editor: "input", width: 120},
+    {title: "Model", field: "Model", editor: "input", width: 150},
+    {title: "Year", field: "Year", editor: "input", width: 70},
+    {title: "Sub-Model", field: "Sub-Model", editor: "input", width: 160},
+    {title: "Liter (Auto)", field: "Liter", editor: "input", width: 90, cssClass: "col-auto-highlight"},
+    {title: "Drive Type (Auto)", field: "Drive Type", editor: "input", width: 120, cssClass: "col-auto-highlight"},
+    {title: "Notes/Callouts", field: "Notes", editor: "input", width: 250},
+    {title: "Region", field: "Region", editor: "input", width: 110},
+    {title: "Position", field: "Position", editor: "input", width: 100},
+    {title: "Source Link", field: "Link1", editor: "input", width: 150},
+    {title: "Source Link 2", field: "Link2", editor: "input", width: 150},
+    {title: "Source Link 3", field: "Link3", editor: "input", width: 150},
+    {title: "Rear Brakes (Auto)", field: "RearBrakes", editor: "input", width: 150, cssClass: "col-auto-highlight"}
+];
+
+let table = new Tabulator("#fitment-table", {
+    data: [], layout: "fitData", height: "100%", 
+    columns: [{formatter:"rowSelection", titleFormatter:"rowSelection", hozAlign:"center", headerSort:false, width:40, frozen:true}, ...TABLE_COLUMNS]
+});
+
+document.addEventListener('keydown', function(e) {
+    if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+    if(e.key === "Delete" || e.key === "Backspace") {
+        const selected = table.getSelectedRows();
+        if(selected.length > 0) {
+            e.preventDefault();
+            selected.forEach(row => row.delete());
+        }
+    }
+});
+
+let dbTree = {}; 
+let knownMakes = [];
+
+function normalizeDrive(d) {
+    if(!d) return "";
+    let s = d.toUpperCase();
+    if(s.includes("FRONT") || s === "FWD") return "FWD";
+    if(s.includes("REAR") || s === "RWD") return "RWD";
+    if(s.includes("ALL") || s === "AWD") return "AWD";
+    if(s.includes("FOUR") || s === "4WD" || s === "4X4") return "4WD";
+    if(s.includes("TWO") || s === "2WD") return "2WD";
+    return s;
+}
+
+document.getElementById('db-upload').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const isCSV = file.name.toLowerCase().endsWith('.csv');
+    document.getElementById('loading').style.display = 'flex';
+    document.getElementById('loading-msg').innerText = "BUILDING STRICT DICTIONARY...";
+
+    if (isCSV) {
+        Papa.parse(file, {
+            header: true, skipEmptyLines: true, worker: true,
+            complete: function(results) { buildCompressedTree(results.data); },
+            error: function(err) { alert("Error parsing CSV."); document.getElementById('loading').style.display = 'none'; }
+        });
+    } else {
+        setTimeout(() => {
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                const wb = XLSX.read(new Uint8Array(evt.target.result), {type: 'array'});
+                const sheet = wb.Sheets[wb.SheetNames[0]];
+                const data = XLSX.utils.sheet_to_json(sheet, {defval: ""});
+                buildCompressedTree(data);
+            };
+            reader.readAsArrayBuffer(file);
+        }, 100);
+    }
+});
+
+function buildCompressedTree(data) {
+    if(data.length === 0) {
+        document.getElementById('loading').style.display = 'none';
+        return alert("File is empty.");
+    }
+
+    let keys = Object.keys(data[0]);
+    let kMake = keys.find(k => k.toLowerCase() === 'make') || keys.find(k => k.toLowerCase().includes('make')) || "";
+    let kModel = keys.find(k => k.toLowerCase() === 'model') || keys.find(k => k.toLowerCase().includes('model')) || "";
+    let kYear = keys.find(k => k.toLowerCase() === 'year') || keys.find(k => k.toLowerCase().includes('year')) || "";
+    let kSub = keys.find(k => k.toLowerCase() === 'sub-model') || keys.find(k => k.toLowerCase().includes('sub')) || "";
+    let kLiter = keys.find(k => k.toLowerCase() === 'liter') || "";
+    let kDrive = keys.find(k => k.toLowerCase() === 'drive type') || keys.find(k => k.toLowerCase().includes('drive')) || "";
+    let kRegion = keys.find(k => k.toLowerCase() === 'region') || keys.find(k => k.toLowerCase().includes('region')) || "";
+    
+    let kRearBrake = keys.find(k => k.toLowerCase().includes('drum/disc')) || keys.find(k => k.toLowerCase().includes('rear brake')) || "";
+
+    if (!kMake || !kModel || !kYear) {
+        document.getElementById('loading').style.display = 'none';
+        return alert("Error: Could not find Make, Model, or Year columns in DB.");
+    }
+
+    dbTree = {}; 
+
+    for (let i = 0; i < data.length; i++) {
+        let row = data[i];
+        let mk = String(row[kMake] || "").trim().toUpperCase();
+        let md = String(row[kModel] || "").trim().toUpperCase();
+        let yr = String(row[kYear] || "").trim();
+        
+        let sub = kSub ? String(row[kSub]).trim() : "";
+        let driveNorm = normalizeDrive(kDrive ? String(row[kDrive]).trim() : "");
+        let regionNorm = kRegion ? String(row[kRegion]).trim() : "";
+        let brakeNorm = kRearBrake ? String(row[kRearBrake]).trim() : "";
+        
+        let literVal = kLiter ? String(row[kLiter]).trim() : "";
+        let parsedL = parseFloat(literVal);
+        let literNorm = !isNaN(parsedL) ? parsedL.toFixed(1) : literVal; 
+
+        if (!mk || !md || !yr) continue;
+
+        if (!dbTree[mk]) dbTree[mk] = {};
+        if (!dbTree[mk][md]) dbTree[mk][md] = {};
+        if (!dbTree[mk][md][yr]) dbTree[mk][md][yr] = [];
+        
+        dbTree[mk][md][yr].push({ 
+            sub: sub, 
+            liter: literNorm, 
+            drive: driveNorm, 
+            region: regionNorm,
+            brake: brakeNorm 
+        });
+    }
+
+    knownMakes = Object.keys(dbTree).sort((a,b) => b.length - a.length);
+    data = null; 
+
+    document.getElementById('upload-txt').innerText = `✓ FULL-PROFILE DICTIONARY LOADED`;
+    document.getElementById('upload-txt').style.color = 'var(--da-red)';
+    document.getElementById('loading').style.display = 'none';
+}
+
+function escapeRegExp(string) { return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function parseAndGenerate() {
+    if (knownMakes.length === 0) return alert("Please upload the Master CSV Database first.");
+    
+    const agent = document.getElementById('agentName').value.trim();
+    const part = document.getElementById('partNum').value.trim();
+    const rawText = document.getElementById('rawFitment').value;
+    
+    const regionChoice = document.getElementById('regionVal').value;
+    const isRegionLocked = document.getElementById('lockRegion').checked;
+
+    if (!rawText.trim()) return alert("Please paste raw fitment text to parse.");
+
+    const staticData = {
+        "Date": new Date().toLocaleDateString('en-US'),
+        "Agent Name": agent,
+        "Part#": part,
+        "Position": document.getElementById('posVal').value.trim(),
+        "Link1": document.getElementById('link1').value.trim(),
+        "Link2": document.getElementById('link2').value.trim(),
+        "Link3": document.getElementById('link3').value.trim()
+    };
+
+    let lines = rawText.split('\n');
+    let generatedRows = [];
+    let errorLogs = []; 
+
+    lines.forEach((line, index) => {
+        let originalLine = line.trim();
+        let lineNum = index + 1;
+
+        if(!originalLine) return;
+        if(/^\d{4}$/.test(originalLine)) return; 
+
+        let yearMatch = originalLine.match(/^(\d{4})\s+(.*)/);
+        if(!yearMatch) return; 
+        
+        let year = yearMatch[1];
+        let remainder = yearMatch[2].trim().toUpperCase();
+
+        let literMatch = remainder.match(/\b(\d\.\d)\s*(?:L|liter|liters)\b/i);
+        let extractedLiter = literMatch ? parseFloat(literMatch[1]).toFixed(1) : "";
+
+        let driveMatch = remainder.match(/\b(FWD|RWD|AWD|4WD|4X4|2WD)\b/i);
+        let extractedDrive = driveMatch ? driveMatch[1].toUpperCase() : "";
+
+        let foundMake = "";
+        for(let m of knownMakes) {
+            if(remainder.startsWith(m)) { foundMake = m; remainder = remainder.substring(m.length).trim(); break; }
+        }
+        if(!foundMake) {
+            errorLogs.push(`[Line ${lineNum}] Skipped: Unknown Make.`);
+            return;
+        }
+
+        let knownModels = Object.keys(dbTree[foundMake]).sort((a,b) => b.length - a.length);
+        let foundModel = "";
+        for(let md of knownModels) {
+            if(remainder.startsWith(md)) { foundModel = md; remainder = remainder.substring(md.length).trim(); break; }
+        }
+        if(!foundModel) {
+            errorLogs.push(`[Line ${lineNum}] Skipped: Unknown Model for ${foundMake}.`);
+            return;
+        }
+
+        let displayMake = foundMake.charAt(0) + foundMake.slice(1).toLowerCase();
+        let displayModel = foundModel.split(' ').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
+
+        let availableVehicles = dbTree[foundMake][foundModel][year] || [];
+        if (availableVehicles.length === 0) {
+            errorLogs.push(`[Line ${lineNum}] Skipped: ${year} ${displayMake} ${displayModel} does not exist in catalog.`);
+            return;
+        }
+        
+        if (extractedLiter) {
+            let filtered = availableVehicles.filter(v => v.liter === extractedLiter);
+            if (filtered.length === 0) {
+                errorLogs.push(`[Line ${lineNum}] Skipped: ${year} ${displayMake} ${displayModel} does not exist with ${extractedLiter}L engine.`);
+                return;
+            }
+            availableVehicles = filtered;
+        }
+
+        if (extractedDrive) {
+            let filtered = availableVehicles.filter(v => v.drive === extractedDrive);
+            if (filtered.length === 0) {
+                errorLogs.push(`[Line ${lineNum}] Skipped: ${year} ${displayMake} ${displayModel} does not exist in ${extractedDrive}.`);
+                return;
+            }
+            availableVehicles = filtered;
+        }
+
+        // --- SUBMODEL MATCHING & EXCEPT LOGIC ---
+        let uniqueSubsInFiltered = [...new Set(availableVehicles.map(v => v.sub))].filter(s => s);
+        uniqueSubsInFiltered.sort((a,b) => b.length - a.length); // LONGEST MATCH FIRST
+        
+        let includedSubs = [];
+        let excludedSubs = [];
+        let notesOriginalCasing = originalLine.substring(originalLine.toUpperCase().indexOf(foundModel) + foundModel.length).trim();
+        let cleanNotes = notesOriginalCasing;
+
+        if (literMatch) cleanNotes = cleanNotes.replace(literMatch[0], '');
+        if (driveMatch) cleanNotes = cleanNotes.replace(driveMatch[0], '');
+
+        uniqueSubsInFiltered.forEach(sub => {
+            let escapedSub = escapeRegExp(sub);
+            // Custom Boundaries: Prevents "SE" from matching inside "SE-R"
+            let boundaryBefore = `(^|[\\s,;\\/\\(\\)])`;
+            let boundaryAfter = `([\\s,;\\/\\(\\)]|$)`;
+            
+            // "except SE-R" or "excluding SE-R"
+            let exceptRegex = new RegExp(`\\b(except|exc\\.?|excluding)\\s+(${escapedSub})${boundaryAfter}`, 'i');
+            // Just "SE-R"
+            let normalRegex = new RegExp(`${boundaryBefore}(${escapedSub})${boundaryAfter}`, 'i');
+
+            if (exceptRegex.test(cleanNotes)) {
+                excludedSubs.push(sub);
+                cleanNotes = cleanNotes.replace(exceptRegex, '$3'); // Delete the submodel and the word "except", leave trailing punctuation
+            } else if (normalRegex.test(cleanNotes)) {
+                includedSubs.push(sub);
+                cleanNotes = cleanNotes.replace(normalRegex, '$1$3'); // Delete the submodel, leave surrounding punctuation
+            }
+        });
+
+        // Apply Included / Excluded Logic
+        if (includedSubs.length > 0) {
+            availableVehicles = availableVehicles.filter(v => includedSubs.includes(v.sub));
+        }
+        if (excludedSubs.length > 0) {
+            availableVehicles = availableVehicles.filter(v => !excludedSubs.includes(v.sub));
+        }
+
+        if (availableVehicles.length === 0) {
+            errorLogs.push(`[Line ${lineNum}] Skipped: Submodel exclusions removed all available vehicles for ${year} ${displayMake} ${displayModel}.`);
+            return;
+        }
+
+        // Final scrub of hanging punctuation and abbreviations
+        cleanNotes = cleanNotes.replace(/\b(?:w\/|with)\b/gi, ''); 
+        cleanNotes = cleanNotes.replace(/^[-\/;,() ]+|[-\/;,() ]+$/g, ''); 
+        cleanNotes = cleanNotes.replace(/\s{2,}/g, ' ').trim(); 
+
+        let uniqueVehicleProfiles = [];
+        let seenSet = new Set();
+        availableVehicles.forEach(v => {
+            let key = `${v.sub}|${v.liter}|${v.drive}|${v.brake}|${v.region}`;
+            if(!seenSet.has(key)) { seenSet.add(key); uniqueVehicleProfiles.push(v); }
+        });
+
+        uniqueVehicleProfiles.forEach(vProfile => {
+            let row = Object.assign({}, staticData);
+            row["Year"] = year;
+            row["Make"] = displayMake;
+            row["Model"] = displayModel;
+            row["Sub-Model"] = vProfile.sub;
+            
+            row["Liter"] = vProfile.liter;
+            row["Drive Type"] = vProfile.drive;
+            row["Notes"] = cleanNotes;
+            
+            if (isRegionLocked) {
+                row["Region"] = regionChoice; 
+            } else {
+                row["Region"] = vProfile.region ? vProfile.region : regionChoice; 
+            }
+            
+            row["RearBrakes"] = vProfile.brake;
+            
+            generatedRows.push(row);
+        });
+    });
+
+    const errorBox = document.getElementById('error-log');
+    if (errorLogs.length > 0) {
+        errorBox.style.display = 'block';
+        errorBox.innerHTML = `<strong>⚠️ VALIDATION FAILURES:</strong><br>` + errorLogs.join('<br>');
+    } else {
+        errorBox.style.display = 'none';
+        errorBox.innerHTML = '';
+    }
+
+    if(generatedRows.length > 0) {
+        table.addData(generatedRows);
+        document.getElementById('rawFitment').value = ""; 
+    }
+}
+
+function exportData() {
+    const rawData = table.getData();
+    if(rawData.length === 0) return alert("Table is empty.");
+
+    const exportHeaders = TABLE_COLUMNS.map(c => c.field);
+    const cleanData = rawData.map(row => {
+        let exportRow = {};
+        exportHeaders.forEach(h => exportRow[h] = row[h] || "");
+        return exportRow;
+    });
+
+    const ws = XLSX.utils.json_to_sheet(cleanData, {header: exportHeaders});
+    
+    TABLE_COLUMNS.forEach((col, idx) => {
+        let cellRef = XLSX.utils.encode_cell({c: idx, r: 0});
+        if(ws[cellRef]) ws[cellRef].v = col.title;
+    });
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "FitmentBatch");
+    XLSX.writeFile(wb, `Fitment_Batch_${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+</script>
+</body>
+</html>
