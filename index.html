@@ -104,7 +104,7 @@
         <div class="form-group">
             <label>Paste Text Block Here</label>
             <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2005 CHRYSLER 300 SRT8"></textarea>
-            <span style="font-size: 10px; color: #888; margin-top: 5px;">Fragment Matcher Active: Maps "SRT8" safely to "C SRT8" and auto-filters out incorrect engines!</span>
+            <span style="font-size: 10px; color: #888; margin-top: 5px;">"Contains" Submodel Matcher Active: Maps "SRT8" cleanly to "C SRT8" using your exact logic!</span>
             <div id="error-log"></div>
         </div>
 
@@ -338,8 +338,10 @@ function parseAndGenerate() {
         if(!originalLine) return;
         if(/^\d{4}$/.test(originalLine)) return; 
 
+        // HARD FAIL: Year Missing
         let yearMatch = originalLine.match(/^(\d{4})\s+(.*)/);
         if(!yearMatch) {
+            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Valid Year not found at the beginning of the line.`);
             failedLines.push(originalLine);
             return; 
         }
@@ -377,14 +379,15 @@ function parseAndGenerate() {
                 break; 
             }
         }
+        
+        // HARD FAIL: Make Missing
         if(!foundMake) {
-            errorLogs.push(`[Line ${lineNum}] Skipped: Unknown Make.`);
+            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Unknown Make.`);
             failedLines.push(originalLine);
             return;
         }
 
         let modelSearchString = remainderUpper.replace(/\b(VAN|TRUCK|PICKUP)\b/ig, ' ').replace(/\s+/g, ' ').trim();
-
         let knownModels = Object.keys(dbTree[foundMake]);
         let possibleModels = [];
         
@@ -394,7 +397,6 @@ function parseAndGenerate() {
                 possibleModels.push(md);
             }
         }
-        
         possibleModels.sort((a,b) => b.length - a.length);
 
         let foundModel = "";
@@ -407,10 +409,11 @@ function parseAndGenerate() {
             }
         }
 
+        // HARD FAIL: Model Missing for that Year
         if(!foundModel) {
             let errorModelDisplay = fallbackModel ? fallbackModel.split(' ').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ') : "Unknown Model";
             let displayMake = foundMake.charAt(0) + foundMake.slice(1).toLowerCase();
-            errorLogs.push(`[Line ${lineNum}] Skipped: ${year} ${displayMake} ${errorModelDisplay} does not exist in catalog.`);
+            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: ${year} ${displayMake} ${errorModelDisplay} does not exist in catalog.`);
             failedLines.push(originalLine);
             return;
         }
@@ -421,14 +424,14 @@ function parseAndGenerate() {
         let availableVehicles = dbTree[foundMake][foundModel][year] || [];
         let cleanNotes = remainderOriginal; 
 
-        // Apply Omni-Attributes filter (Soft Fallback)
+        // --- THE SOFT-FALLBACK SYSTEM ---
+        let validDynamicAttrs = [];
         let allAvailableAttrs = new Set();
         availableVehicles.forEach(v => {
             if(v.attrs) v.attrs.forEach(a => allAvailableAttrs.add(a.toUpperCase()));
         });
         let sortedAttrs = [...allAvailableAttrs].sort((a,b) => b.length - a.length);
 
-        let validDynamicAttrs = [];
         sortedAttrs.forEach(attr => {
             let attrRegex = new RegExp(`\\b${escapeRegExp(attr)}\\b`, 'i');
             if(attrRegex.test(cleanNotes)) {
@@ -440,13 +443,14 @@ function parseAndGenerate() {
             }
         });
 
-        // Track what successfully filtered the list so we can scrub it later
         let scrubLiter = false;
         if (extractedLiter) {
             let filtered = availableVehicles.filter(v => v.liter === extractedLiter);
             if (filtered.length > 0) {
                 availableVehicles = filtered;
                 scrubLiter = true;
+            } else {
+                errorLogs.push(`[Line ${lineNum}] ⚠️ WARNING: Catalog lacks ${extractedLiter}L for ${displayModel}. Left in notes.`);
             }
         }
 
@@ -456,6 +460,8 @@ function parseAndGenerate() {
             if (filtered.length > 0) {
                 availableVehicles = filtered;
                 scrubDrive = true;
+            } else {
+                errorLogs.push(`[Line ${lineNum}] ⚠️ WARNING: Catalog lacks ${extractedDrive} for ${displayModel}. Left in notes.`);
             }
         }
         
@@ -465,9 +471,12 @@ function parseAndGenerate() {
             if (filtered.length > 0) {
                 availableVehicles = filtered;
                 scrubCyl = true;
+            } else {
+                errorLogs.push(`[Line ${lineNum}] ⚠️ WARNING: Catalog lacks ${extractedCyl} Cyl for ${displayModel}. Left in notes.`);
             }
         }
 
+        // --- SUBMODEL MATCHER ---
         let allSubsForModel = new Set();
         for(let y in dbTree[foundMake][foundModel]) {
             dbTree[foundMake][foundModel][y].forEach(v => allSubsForModel.add(v.sub.toUpperCase()));
@@ -485,12 +494,14 @@ function parseAndGenerate() {
         }
 
         let allSubsArray = [...allSubsForModel].filter(s => s).sort((a,b) => b.length - a.length);
-        let maskedForSubs = cleanNotes; 
+        
+        let maskedForSubs = cleanNotes;
+        if (cylMatch) maskedForSubs = maskedForSubs.replace(new RegExp(`\\b${escapeRegExp(cylMatch[0])}\\b`, 'ig'), '');
 
         let mentionedSubs = [];
         let excludedSubs = [];
 
-        // 1. EXACT SUBMODEL MATCHING (Handles spaces perfectly because allSubsArray is sorted by length)
+        // 1. EXACT SUBMODEL MATCHING
         allSubsArray.forEach(sub => {
             let escapedSub = escapeRegExp(sub);
             let boundaryBefore = `(^|[\\s,;\\/\\(\\)\\-])`;
@@ -506,63 +517,50 @@ function parseAndGenerate() {
             }
         });
 
-        // 2. FRAGMENT SUBMODEL MATCHER (Bridges 'SRT8' to 'C SRT8')
+        // 2. THE "CONTAINS" SUBMODEL MATCHER
+        // If no exact match is found, check if the text contains a word that exists INSIDE a catalog submodel.
         if (mentionedSubs.length === 0 && excludedSubs.length === 0) {
-            allSubsArray.forEach(sub => {
-                // Splits catalog submodel 'C SRT8' into ['C', 'SRT8']
-                let parts = sub.split(/[\s\-]+/);
-                let matched = false;
-                parts.forEach(part => {
-                    // Requires fragments to be at least 2 letters (ignores 'C' alone, but matches 'SRT8')
-                    if (part.length >= 2) {
-                        let partRegex = new RegExp(`\\b${escapeRegExp(part)}\\b`, 'i');
-                        if (partRegex.test(maskedForSubs)) {
-                            matched = true;
-                        }
+            // Split the user's text into individual words, ignoring tiny 1-2 letter words
+            let textWords = maskedForSubs.split(/[\s,;\\/\\(\\)\\-]+/).filter(w => w.length > 2);
+            
+            textWords.forEach(word => {
+                let wordRegex = new RegExp(`\\b${escapeRegExp(word)}\\b`, 'i');
+                allSubsArray.forEach(sub => {
+                    if (wordRegex.test(sub)) {
+                        mentionedSubs.push(sub);
+                        // Make sure to scrub the trigger word so it doesn't get left behind!
+                        cleanNotes = cleanNotes.replace(wordRegex, ' ');
                     }
                 });
-                if (matched) {
-                    mentionedSubs.push(sub);
-                }
             });
+            // Ensure we don't duplicate matches
+            mentionedSubs = [...new Set(mentionedSubs)];
         }
 
-        // Apply filters based on matched submodels
+        // Submodel Soft Fallback Application
         let validMentionedSubs = mentionedSubs.filter(sub => availableVehicles.some(v => v.sub.toUpperCase() === sub.toUpperCase()));
         let validExcludedSubs = excludedSubs.filter(sub => availableVehicles.some(v => v.sub.toUpperCase() === sub.toUpperCase()));
 
+        // ONLY filter the vehicles if the submodel actually exists! 
         if (validMentionedSubs.length > 0) {
             availableVehicles = availableVehicles.filter(v => validMentionedSubs.some(m => m.toUpperCase() === v.sub.toUpperCase()));
-        }
+        } 
         if (validExcludedSubs.length > 0) {
             availableVehicles = availableVehicles.filter(v => !validExcludedSubs.some(m => m.toUpperCase() === v.sub.toUpperCase()));
         }
 
         // --- FINAL SCRUBBER ---
+        
         validDynamicAttrs.forEach(regex => {
             cleanNotes = cleanNotes.replace(regex, ' ');
         });
 
         validMentionedSubs.forEach(sub => {
-            // Scrubs exact submodel matches
             cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(sub)}\\b`, 'ig'), '');
-            // Scrubs submodel fragments (e.g. removes "SRT8" if "C SRT8" was matched)
-            let parts = sub.split(/[\s\-]+/);
-            parts.forEach(part => {
-                if(part.length >= 2) {
-                    cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(part)}\\b`, 'ig'), '');
-                }
-            });
         });
         
         validExcludedSubs.forEach(sub => {
             cleanNotes = cleanNotes.replace(new RegExp(`\\b(except|exc\\.?|excluding)\\s+${escapeRegExp(sub)}\\b`, 'ig'), '');
-            let parts = sub.split(/[\s\-]+/);
-            parts.forEach(part => {
-                if(part.length >= 2) {
-                    cleanNotes = cleanNotes.replace(new RegExp(`\\b(except|exc\\.?|excluding)\\s+${escapeRegExp(part)}\\b`, 'ig'), '');
-                }
-            });
         });
 
         if (scrubLiter && literMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(literMatch[0])}\\b`, 'ig'), '');
@@ -607,7 +605,7 @@ function parseAndGenerate() {
     const errorBox = document.getElementById('error-log');
     if (errorLogs.length > 0) {
         errorBox.style.display = 'block';
-        errorBox.innerHTML = `<strong>⚠️ VALIDATION FAILURES:</strong><br>` + errorLogs.join('<br>');
+        errorBox.innerHTML = `<strong>⚠️ PARSER LOGS:</strong><br>` + errorLogs.join('<br>');
     } else {
         errorBox.style.display = 'none';
         errorBox.innerHTML = '';
