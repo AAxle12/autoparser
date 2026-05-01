@@ -101,7 +101,8 @@
         <div class="section-title">Raw Fitment Data</div>
         <div class="form-group">
             <label>Paste Text Block Here</label>
-            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2001 GMC YUKON Denali 4WD"></textarea>
+            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2001 HONDA ACCORD Coupe"></textarea>
+            <span style="font-size: 10px; color: #888; margin-top: 5px;">If a line fails validation, it will safely remain in this box so you can manually edit it!</span>
             <div id="error-log"></div>
         </div>
 
@@ -152,6 +153,7 @@
 </div>
 
 <script>
+// We removed the Body Type column so the export perfectly matches your format.
 const TABLE_COLUMNS = [
     {title: "Date", field: "Date", editor: "input", width: 90},
     {title: "Agent Name", field: "Agent Name", editor: "input", width: 100},
@@ -243,6 +245,7 @@ function buildCompressedTree(data) {
     let kDrive = keys.find(k => k.toLowerCase() === 'drive type') || keys.find(k => k.toLowerCase().includes('drive')) || "";
     let kRegion = keys.find(k => k.toLowerCase() === 'region') || keys.find(k => k.toLowerCase().includes('region')) || "";
     let kRearBrake = keys.find(k => k.toLowerCase().includes('drum/disc')) || keys.find(k => k.toLowerCase().includes('rear brake')) || "";
+    let kBody = keys.find(k => k.toLowerCase() === 'body type' || k.toLowerCase() === 'body type name') || keys.find(k => k.toLowerCase().includes('body')) || "";
 
     if (!kMake || !kModel || !kYear) {
         document.getElementById('loading').style.display = 'none';
@@ -261,6 +264,7 @@ function buildCompressedTree(data) {
         let driveNorm = normalizeDrive(kDrive ? String(row[kDrive]).trim() : "");
         let regionNorm = kRegion ? String(row[kRegion]).trim() : "";
         let brakeNorm = kRearBrake ? String(row[kRearBrake]).trim() : "";
+        let bodyNorm = kBody ? String(row[kBody]).trim() : "";
         
         let literVal = kLiter ? String(row[kLiter]).trim() : "";
         let parsedL = parseFloat(literVal);
@@ -277,7 +281,8 @@ function buildCompressedTree(data) {
             liter: literNorm, 
             drive: driveNorm, 
             region: regionNorm,
-            brake: brakeNorm 
+            brake: brakeNorm,
+            body: bodyNorm 
         });
     }
 
@@ -341,6 +346,9 @@ function parseAndGenerate() {
         let driveMatch = remainderUpper.match(/\b(FWD|RWD|AWD|4WD|4X4|2WD)\b/i);
         let extractedDrive = driveMatch ? driveMatch[1].toUpperCase() : "";
         if (extractedDrive === "2WD") extractedDrive = "RWD";
+        
+        let bodyMatch = remainderUpper.match(/\b(COUPE|SEDAN|HATCHBACK|CONVERTIBLE|WAGON|SUV|VAN|MINIVAN|CREW CAB|EXTENDED CAB|REGULAR CAB|QUAD CAB|MEGA CAB)\b/i);
+        let extractedBody = bodyMatch ? bodyMatch[1] : "";
 
         let foundMake = "";
         let originalRemainderMake = remainderUpper;
@@ -385,9 +393,41 @@ function parseAndGenerate() {
         let displayMake = foundMake.charAt(0) + foundMake.slice(1).toLowerCase();
         let displayModel = foundModel.split(' ').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
 
-        let baseVehicles = dbTree[foundMake][foundModel][year] || [];
+        let availableVehicles = dbTree[foundMake][foundModel][year] || [];
         
-        // 1. EXTRACT SUBMODELS FROM TEXT FIRST
+        if (extractedLiter) {
+            let filtered = availableVehicles.filter(v => v.liter === extractedLiter);
+            if (filtered.length === 0) {
+                let trueLiters = [...new Set(availableVehicles.map(v=>v.liter))].filter(Boolean).join(' or ');
+                errorLogs.push(`[Line ${lineNum}] Skipped: Mismatch! Text asked for ${extractedLiter}L, but catalog says ${displayModel} is [${trueLiters || 'N/A'}L].`);
+                failedLines.push(originalLine);
+                return;
+            }
+            availableVehicles = filtered;
+        }
+
+        if (extractedDrive) {
+            let filtered = availableVehicles.filter(v => v.drive === extractedDrive);
+            if (filtered.length === 0) {
+                let trueDrives = [...new Set(availableVehicles.map(v=>v.drive))].filter(Boolean).join(' or ');
+                errorLogs.push(`[Line ${lineNum}] Skipped: Mismatch! Text asked for ${extractedDrive}, but catalog says ${displayModel} is [${trueDrives || 'N/A'}].`);
+                failedLines.push(originalLine);
+                return;
+            }
+            availableVehicles = filtered;
+        }
+        
+        // INTERCEPTOR FILTER: Filter the catalog using the Body Type
+        if (extractedBody) {
+            let filtered = availableVehicles.filter(v => v.body && v.body.toUpperCase().includes(extractedBody.toUpperCase()));
+            if (filtered.length === 0) {
+                errorLogs.push(`[Line ${lineNum}] Skipped: Mismatch! Text asked for a ${extractedBody}, but catalog doesn't have it for ${year} ${displayMake} ${displayModel}.`);
+                failedLines.push(originalLine);
+                return;
+            }
+            availableVehicles = filtered;
+        }
+
         let allSubsForModel = new Set();
         for(let y in dbTree[foundMake][foundModel]) {
             dbTree[foundMake][foundModel][y].forEach(v => allSubsForModel.add(v.sub));
@@ -395,9 +435,12 @@ function parseAndGenerate() {
         let allSubsArray = [...allSubsForModel].filter(s => s).sort((a,b) => b.length - a.length);
 
         let cleanNotes = remainderOriginal; 
+
         let regexRepeatedModel = new RegExp(`\\b${escapeRegExp(foundModel)}\\b`, 'ig');
         cleanNotes = cleanNotes.replace(regexRepeatedModel, ' ');
 
+        // Note: I deliberately REMOVED the code that deleted the Body Type from the notes.
+        // It will now stay exactly where you pasted it!
         if (literMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(literMatch[0])}\\b`, 'ig'), '');
         if (driveMatch) cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(driveMatch[0])}\\b`, 'ig'), '');
 
@@ -421,53 +464,23 @@ function parseAndGenerate() {
             }
         });
 
-        let availableVehicles = [...baseVehicles];
-
-        // 2. FILTER BY SUBMODEL IF MENTIONED
         if (mentionedSubs.length > 0) {
-            let matchedSubsVehicles = availableVehicles.filter(v => mentionedSubs.includes(v.sub));
-            if (matchedSubsVehicles.length === 0) {
-                errorLogs.push(`[Line ${lineNum}] Skipped: Submodel(s) "${mentionedSubs.join(', ')}" not found for ${year} ${displayMake} ${displayModel}.`);
+            let matchedAvailable = availableVehicles.filter(v => mentionedSubs.includes(v.sub));
+            if (matchedAvailable.length === 0) {
+                errorLogs.push(`[Line ${lineNum}] Skipped: ${year} ${displayMake} ${displayModel} does not have submodel(s) "${mentionedSubs.join(', ')}" in the catalog for this configuration.`);
                 failedLines.push(originalLine);
                 return;
             }
-            availableVehicles = matchedSubsVehicles;
+            availableVehicles = matchedAvailable;
         }
 
-        // Apply Exclusions
         if (excludedSubs.length > 0) {
             availableVehicles = availableVehicles.filter(v => !excludedSubs.includes(v.sub));
             if (availableVehicles.length === 0) {
-                errorLogs.push(`[Line ${lineNum}] Skipped: Exclusions removed all vehicles for ${year} ${displayMake} ${displayModel}.`);
+                errorLogs.push(`[Line ${lineNum}] Skipped: Submodel exclusions removed all vehicles for ${year} ${displayMake} ${displayModel}.`);
                 failedLines.push(originalLine);
                 return;
             }
-        }
-
-        // 3. SMART FILTER: LITER
-        if (extractedLiter) {
-            let filtered = availableVehicles.filter(v => v.liter === extractedLiter);
-            if (filtered.length === 0) {
-                let trueLiters = [...new Set(availableVehicles.map(v=>v.liter))].filter(Boolean).join(' or ');
-                let subName = mentionedSubs.length > 0 ? mentionedSubs.join(', ') : displayModel;
-                errorLogs.push(`[Line ${lineNum}] Skipped: Mismatch! Text asked for ${extractedLiter}L, but catalog says ${subName} is [${trueLiters || 'N/A'}L].`);
-                failedLines.push(originalLine);
-                return;
-            }
-            availableVehicles = filtered;
-        }
-
-        // 4. SMART FILTER: DRIVE TYPE
-        if (extractedDrive) {
-            let filtered = availableVehicles.filter(v => v.drive === extractedDrive);
-            if (filtered.length === 0) {
-                let trueDrives = [...new Set(availableVehicles.map(v=>v.drive))].filter(Boolean).join(' or ');
-                let subName = mentionedSubs.length > 0 ? mentionedSubs.join(', ') : displayModel;
-                errorLogs.push(`[Line ${lineNum}] Skipped: Mismatch! Text asked for ${extractedDrive}, but catalog says ${subName} is [${trueDrives || 'N/A'}].`);
-                failedLines.push(originalLine);
-                return;
-            }
-            availableVehicles = filtered;
         }
 
         cleanNotes = cleanNotes.replace(/\b(?:w\/|with)\b/gi, ''); 
@@ -478,7 +491,7 @@ function parseAndGenerate() {
         let uniqueVehicleProfiles = [];
         let seenSet = new Set();
         availableVehicles.forEach(v => {
-            let key = `${v.sub}|${v.liter}|${v.drive}|${v.brake}|${v.region}`;
+            let key = `${v.sub}|${v.liter}|${v.drive}|${v.brake}|${v.region}|${v.body}`;
             if(!seenSet.has(key)) { seenSet.add(key); uniqueVehicleProfiles.push(v); }
         });
 
@@ -491,7 +504,7 @@ function parseAndGenerate() {
             
             row["Liter"] = vProfile.liter;
             row["Drive Type"] = vProfile.drive;
-            row["Notes"] = cleanNotes;
+            row["Notes"] = cleanNotes; // The body type (like "Coupe") safely lives here now
             
             if (isRegionLocked) {
                 row["Region"] = regionChoice; 
@@ -518,7 +531,6 @@ function parseAndGenerate() {
         table.addData(generatedRows);
     }
     
-    // IF LINES FAILED, KEEP THEM IN THE TEXT BOX SO THE USER CAN FIX THEM!
     if(failedLines.length > 0) {
         document.getElementById('rawFitment').value = failedLines.join('\n');
     } else {
