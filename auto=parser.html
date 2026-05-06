@@ -53,6 +53,7 @@
         button { cursor: pointer; padding: 12px; border: none; border-radius: 5px; font-weight: bold; color: white; transition: 0.2s; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 5px;}
         button:hover { transform: translateY(-1px); filter: brightness(1.1); box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         .btn-blue { background: var(--da-blue); width: 100%; }
+        .btn-green { background: #27ae60; width: 100%; color: white; }
         .btn-red { background: var(--da-red); width: 100%; margin-top: 15px; padding: 15px; font-size: 14px; box-shadow: 0 4px 10px rgba(211, 17, 69, 0.2);}
         .btn-dark { background: var(--da-black); }
 
@@ -80,6 +81,7 @@
     <div class="logo">DETROIT <span>AXLE</span> | FITMENT AUTO-PARSER</div>
     <div style="display: flex; gap: 10px;">
         <button class="btn-dark" onclick="table.clearData()">🧹 CLEAR TABLE</button>
+        <button class="btn-green" id="copyBtn" onclick="copyData()" style="width: auto; padding: 10px 20px;">📋 COPY DATA</button>
         <button class="btn-blue" onclick="exportData()" style="width: auto; padding: 10px 20px;">⬇ EXPORT EXCEL</button>
     </div>
 </header>
@@ -94,14 +96,15 @@
 
         <div class="section-title">Static Job Details</div>
         <div class="form-grid">
-            <div class="form-group"><label>Agent Name</label><input type="text" id="agentName" placeholder="e.g. Caesar"></div>
+            <div class="form-group"><label>Agent Name</label><input type="text" id="agentName" value="Faris" placeholder="e.g. Faris"></div>
             <div class="form-group"><label>Part Number</label><input type="text" id="partNum" placeholder="e.g. P-1053"></div>
         </div>
 
         <div class="section-title">Raw Fitment Data</div>
         <div class="form-group">
             <label>Paste Text Block Here</label>
-            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2006 NISSAN ALTIMA except SE-R&#10;2005 HONDA CIVIC 2.0L"></textarea>
+            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2014 DODGE CHALLENGER 3.6L, except 6.4L"></textarea>
+            <span style="font-size: 10px; color: #888; margin-top: 5px;">Targeted Scrubber Active: Protects 'Except' when attached to non-catalog callouts.</span>
             <div id="error-log"></div>
         </div>
 
@@ -140,7 +143,7 @@
     <div class="table-container">
         <div class="toolbar">
             <div style="font-weight: bold; color: var(--da-black); font-size: 14px;">GENERATED FITMENT DATA</div>
-            <div style="font-size: 12px; color: #666;">Liter, Drive, Region, and Rear Brakes are automatically pulled from the catalog and mapped.</div>
+            <div style="font-size: 12px; color: #666;">Data is aligned for direct copy-pasting. Attributes are filtered and scrubbed efficiently.</div>
         </div>
         <div id="fitment-table"></div>
     </div>
@@ -160,10 +163,10 @@ const TABLE_COLUMNS = [
     {title: "Model", field: "Model", editor: "input", width: 150},
     {title: "Year", field: "Year", editor: "input", width: 70},
     {title: "Sub-Model", field: "Sub-Model", editor: "input", width: 160},
-    {title: "Liter (Auto)", field: "Liter", editor: "input", width: 90, cssClass: "col-auto-highlight"},
-    {title: "Drive Type (Auto)", field: "Drive Type", editor: "input", width: 120, cssClass: "col-auto-highlight"},
+    {title: "Liter (if it matter)", field: "Liter", editor: "input", width: 130, cssClass: "col-auto-highlight"},
+    {title: "Region (if it matter)", field: "Region", editor: "input", width: 140},
+    {title: "Drive Type (if it matter)", field: "Drive Type", editor: "input", width: 160, cssClass: "col-auto-highlight"},
     {title: "Notes/Callouts", field: "Notes", editor: "input", width: 250},
-    {title: "Region", field: "Region", editor: "input", width: 110},
     {title: "Position", field: "Position", editor: "input", width: 100},
     {title: "Source Link", field: "Link1", editor: "input", width: 150},
     {title: "Source Link 2", field: "Link2", editor: "input", width: 150},
@@ -194,10 +197,9 @@ function normalizeDrive(d) {
     if(!d) return "";
     let s = d.toUpperCase();
     if(s.includes("FRONT") || s === "FWD") return "FWD";
-    if(s.includes("REAR") || s === "RWD") return "RWD";
+    if(s.includes("REAR") || s === "RWD" || s.includes("TWO") || s === "2WD") return "RWD";
     if(s.includes("ALL") || s === "AWD") return "AWD";
     if(s.includes("FOUR") || s === "4WD" || s === "4X4") return "4WD";
-    if(s.includes("TWO") || s === "2WD") return "2WD";
     return s;
 }
 
@@ -207,7 +209,7 @@ document.getElementById('db-upload').addEventListener('change', function(e) {
 
     const isCSV = file.name.toLowerCase().endsWith('.csv');
     document.getElementById('loading').style.display = 'flex';
-    document.getElementById('loading-msg').innerText = "BUILDING STRICT DICTIONARY...";
+    document.getElementById('loading-msg').innerText = "BUILDING OMNI-DICTIONARY...";
 
     if (isCSV) {
         Papa.parse(file, {
@@ -243,8 +245,12 @@ function buildCompressedTree(data) {
     let kLiter = keys.find(k => k.toLowerCase() === 'liter') || "";
     let kDrive = keys.find(k => k.toLowerCase() === 'drive type') || keys.find(k => k.toLowerCase().includes('drive')) || "";
     let kRegion = keys.find(k => k.toLowerCase() === 'region') || keys.find(k => k.toLowerCase().includes('region')) || "";
-    
     let kRearBrake = keys.find(k => k.toLowerCase().includes('drum/disc')) || keys.find(k => k.toLowerCase().includes('rear brake')) || "";
+    
+    let kCyl = keys.find(k => k.toLowerCase() === 'cyl' || k.toLowerCase() === 'cylinders' || k.toLowerCase() === 'engine' || k.toLowerCase() === 'engine type') || "";
+    
+    let standardKeys = [kMake, kModel, kYear, kSub, kLiter, kDrive, kRegion, kRearBrake, kCyl].map(k => k.toLowerCase());
+    let auxKeys = keys.filter(k => !standardKeys.includes(k.toLowerCase()) && !/date|agent|part|position|link|notes/i.test(k));
 
     if (!kMake || !kModel || !kYear) {
         document.getElementById('loading').style.display = 'none';
@@ -263,10 +269,17 @@ function buildCompressedTree(data) {
         let driveNorm = normalizeDrive(kDrive ? String(row[kDrive]).trim() : "");
         let regionNorm = kRegion ? String(row[kRegion]).trim() : "";
         let brakeNorm = kRearBrake ? String(row[kRearBrake]).trim() : "";
+        let cylNorm = kCyl ? String(row[kCyl]).trim() : "";
         
         let literVal = kLiter ? String(row[kLiter]).trim() : "";
         let parsedL = parseFloat(literVal);
         let literNorm = !isNaN(parsedL) ? parsedL.toFixed(1) : literVal; 
+
+        let dynamicAttrs = [];
+        auxKeys.forEach(k => {
+            let val = String(row[k] || "").trim();
+            if (val && val.length > 1) dynamicAttrs.push(val);
+        });
 
         if (!mk || !md || !yr) continue;
 
@@ -279,14 +292,16 @@ function buildCompressedTree(data) {
             liter: literNorm, 
             drive: driveNorm, 
             region: regionNorm,
-            brake: brakeNorm 
+            brake: brakeNorm,
+            cyl: cylNorm,
+            attrs: dynamicAttrs 
         });
     }
 
     knownMakes = Object.keys(dbTree).sort((a,b) => b.length - a.length);
     data = null; 
 
-    document.getElementById('upload-txt').innerText = `✓ FULL-PROFILE DICTIONARY LOADED`;
+    document.getElementById('upload-txt').innerText = `✓ OMNI-CATALOG LOADED`;
     document.getElementById('upload-txt').style.color = 'var(--da-red)';
     document.getElementById('loading').style.display = 'none';
 }
@@ -318,6 +333,7 @@ function parseAndGenerate() {
     let lines = rawText.split('\n');
     let generatedRows = [];
     let errorLogs = []; 
+    let failedLines = []; 
 
     lines.forEach((line, index) => {
         let originalLine = line.trim();
@@ -327,33 +343,112 @@ function parseAndGenerate() {
         if(/^\d{4}$/.test(originalLine)) return; 
 
         let yearMatch = originalLine.match(/^(\d{4})\s+(.*)/);
-        if(!yearMatch) return; 
+        if(!yearMatch) {
+            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Valid Year not found.`);
+            failedLines.push(originalLine);
+            return; 
+        }
         
         let year = yearMatch[1];
-        let remainder = yearMatch[2].trim().toUpperCase();
+        let remainderUpper = yearMatch[2].trim().toUpperCase();
+        let remainderOriginal = yearMatch[2].trim(); 
 
-        let literMatch = remainder.match(/\b(\d\.\d)\s*(?:L|liter|liters)\b/i);
-        let extractedLiter = literMatch ? parseFloat(literMatch[1]).toFixed(1) : "";
+        const exclusionPattern = `\\b(?:except|exc\\.?|excluding|not for)\\s+`;
 
-        let driveMatch = remainder.match(/\b(FWD|RWD|AWD|4WD|4X4|2WD)\b/i);
-        let extractedDrive = driveMatch ? driveMatch[1].toUpperCase() : "";
+        // --- GLOBAL ARRAY EXTRACTION FOR LITERS ---
+        let literRegex = new RegExp(`(${exclusionPattern})?(\\d\\.\\d)\\s*(?:L|liter|liters)\\b`, 'ig');
+        let includedLiters = [];
+        let excludedLiters = [];
+        let scrubLiterPhrases = [];
+        let lMatch;
+        while ((lMatch = literRegex.exec(remainderUpper)) !== null) {
+            scrubLiterPhrases.push(lMatch[0]);
+            let val = parseFloat(lMatch[2]).toFixed(1);
+            if (lMatch[1]) excludedLiters.push(val);
+            else includedLiters.push(val);
+        }
+
+        // --- GLOBAL ARRAY EXTRACTION FOR DRIVES ---
+        let driveRegex = new RegExp(`(${exclusionPattern})?(FWD|RWD|AWD|4WD|4X4|2WD)\\b`, 'ig');
+        let includedDrives = [];
+        let excludedDrives = [];
+        let scrubDrivePhrases = [];
+        let dMatch;
+        while ((dMatch = driveRegex.exec(remainderUpper)) !== null) {
+            scrubDrivePhrases.push(dMatch[0]);
+            let val = dMatch[2].toUpperCase();
+            if (val === "2WD") val = "RWD";
+            if (dMatch[1]) excludedDrives.push(val);
+            else includedDrives.push(val);
+        }
+        
+        // --- GLOBAL ARRAY EXTRACTION FOR CYLINDERS ---
+        let cylRegex = new RegExp(`(${exclusionPattern})?(V-?6|V-?8|V-?10|V-?12|\\d{1,2}\\s*CYL(?:INDER)?S?|I-?4|I-?6|L-?4|L-?6)\\b`, 'ig');
+        let includedCyls = [];
+        let excludedCyls = [];
+        let scrubCylPhrases = [];
+        let cMatch;
+        while ((cMatch = cylRegex.exec(remainderUpper)) !== null) {
+            scrubCylPhrases.push(cMatch[0]);
+            let s = cMatch[2].toUpperCase().replace(/[-\s]/g, '');
+            let val = "";
+            if (s.includes('4')) val = "4";
+            else if (s.includes('6')) val = "6";
+            else if (s.includes('8')) val = "8";
+            else if (s.includes('10')) val = "10";
+            else if (s.includes('12')) val = "12";
+            
+            if (val) {
+                if (cMatch[1]) excludedCyls.push(val);
+                else includedCyls.push(val);
+            }
+        }
 
         let foundMake = "";
+        let originalRemainderMake = remainderUpper;
         for(let m of knownMakes) {
-            if(remainder.startsWith(m)) { foundMake = m; remainder = remainder.substring(m.length).trim(); break; }
+            let makeRegex = new RegExp(`^${escapeRegExp(m)}\\b`, 'i');
+            if(makeRegex.test(originalRemainderMake)) { 
+                foundMake = m; 
+                remainderUpper = originalRemainderMake.replace(makeRegex, '').trim(); 
+                remainderOriginal = remainderOriginal.replace(makeRegex, '').trim();
+                break; 
+            }
         }
+        
         if(!foundMake) {
-            errorLogs.push(`[Line ${lineNum}] Skipped: Unknown Make.`);
+            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Unknown Make.`);
+            failedLines.push(originalLine);
             return;
         }
 
-        let knownModels = Object.keys(dbTree[foundMake]).sort((a,b) => b.length - a.length);
-        let foundModel = "";
+        let modelSearchString = remainderUpper.replace(/\b(VAN|TRUCK|PICKUP)\b/ig, ' ').replace(/\s+/g, ' ').trim();
+        let knownModels = Object.keys(dbTree[foundMake]);
+        let possibleModels = [];
+        
         for(let md of knownModels) {
-            if(remainder.startsWith(md)) { foundModel = md; remainder = remainder.substring(md.length).trim(); break; }
+            let regex = new RegExp(`\\b${escapeRegExp(md)}\\b`, 'i');
+            if(regex.test(modelSearchString)) {
+                possibleModels.push(md);
+            }
         }
+        possibleModels.sort((a,b) => b.length - a.length);
+
+        let foundModel = "";
+        let fallbackModel = possibleModels.length > 0 ? possibleModels[0] : "";
+        
+        for(let md of possibleModels) {
+            if(dbTree[foundMake][md] && dbTree[foundMake][md][year]) {
+                foundModel = md; 
+                break; 
+            }
+        }
+
         if(!foundModel) {
-            errorLogs.push(`[Line ${lineNum}] Skipped: Unknown Model for ${foundMake}.`);
+            let errorModelDisplay = fallbackModel ? fallbackModel.split(' ').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ') : "Unknown Model";
+            let displayMake = foundMake.charAt(0) + foundMake.slice(1).toLowerCase();
+            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: ${year} ${displayMake} ${errorModelDisplay} does not exist in catalog.`);
+            failedLines.push(originalLine);
             return;
         }
 
@@ -361,77 +456,192 @@ function parseAndGenerate() {
         let displayModel = foundModel.split(' ').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
 
         let availableVehicles = dbTree[foundMake][foundModel][year] || [];
-        if (availableVehicles.length === 0) {
-            errorLogs.push(`[Line ${lineNum}] Skipped: ${year} ${displayMake} ${displayModel} does not exist in catalog.`);
-            return;
-        }
-        
-        if (extractedLiter) {
-            let filtered = availableVehicles.filter(v => v.liter === extractedLiter);
-            if (filtered.length === 0) {
-                errorLogs.push(`[Line ${lineNum}] Skipped: ${year} ${displayMake} ${displayModel} does not exist with ${extractedLiter}L engine.`);
+        let cleanNotes = remainderOriginal; 
+
+        // --- APPLY GLOBAL HARD FILTERS ---
+        if (includedLiters.length > 0 || excludedLiters.length > 0) {
+            let filtered = availableVehicles.filter(v => {
+                let keep = true;
+                if (includedLiters.length > 0 && !includedLiters.includes(v.liter)) keep = false;
+                if (excludedLiters.length > 0 && excludedLiters.includes(v.liter)) keep = false;
+                return keep;
+            });
+            if (filtered.length > 0) {
+                availableVehicles = filtered;
+            } else {
+                errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Catalog lacks vehicles matching Liter logic for ${displayModel}.`);
+                failedLines.push(originalLine);
                 return;
             }
-            availableVehicles = filtered;
         }
 
-        if (extractedDrive) {
-            let filtered = availableVehicles.filter(v => v.drive === extractedDrive);
-            if (filtered.length === 0) {
-                errorLogs.push(`[Line ${lineNum}] Skipped: ${year} ${displayMake} ${displayModel} does not exist in ${extractedDrive}.`);
+        if (includedDrives.length > 0 || excludedDrives.length > 0) {
+            let filtered = availableVehicles.filter(v => {
+                let keep = true;
+                if (includedDrives.length > 0 && !includedDrives.some(d => v.drive.includes(d))) keep = false;
+                if (excludedDrives.length > 0 && excludedDrives.some(d => v.drive.includes(d))) keep = false;
+                return keep;
+            });
+            if (filtered.length > 0) {
+                availableVehicles = filtered;
+            } else {
+                errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Catalog lacks vehicles matching Drive logic for ${displayModel}.`);
+                failedLines.push(originalLine);
                 return;
             }
-            availableVehicles = filtered;
         }
-
-        // --- SUBMODEL MATCHING & EXCEPT LOGIC ---
-        let uniqueSubsInFiltered = [...new Set(availableVehicles.map(v => v.sub))].filter(s => s);
-        uniqueSubsInFiltered.sort((a,b) => b.length - a.length); // LONGEST MATCH FIRST
         
-        let includedSubs = [];
-        let excludedSubs = [];
-        let notesOriginalCasing = originalLine.substring(originalLine.toUpperCase().indexOf(foundModel) + foundModel.length).trim();
-        let cleanNotes = notesOriginalCasing;
+        if (includedCyls.length > 0 || excludedCyls.length > 0) {
+            let filtered = availableVehicles.filter(v => {
+                let checkCylMatch = (cylArray) => {
+                    for (let extCyl of cylArray) {
+                        if (v.cyl && String(v.cyl).trim() === extCyl) return true;
+                        let flexRegex = new RegExp(`\\b(V-?${extCyl}|${extCyl}\\s*CYL(?:INDER)?S?|I-?${extCyl}|L-?${extCyl})\\b`, 'i');
+                        if (v.cyl && flexRegex.test(v.cyl)) return true;
+                        if (v.sub && flexRegex.test(v.sub)) return true;
+                        if (v.attrs && v.attrs.some(a => flexRegex.test(a))) return true;
+                    }
+                    return false;
+                };
 
-        if (literMatch) cleanNotes = cleanNotes.replace(literMatch[0], '');
-        if (driveMatch) cleanNotes = cleanNotes.replace(driveMatch[0], '');
+                let matchingIncluded = includedCyls.length > 0 ? checkCylMatch(includedCyls) : true;
+                let matchingExcluded = excludedCyls.length > 0 ? checkCylMatch(excludedCyls) : false;
 
-        uniqueSubsInFiltered.forEach(sub => {
-            let escapedSub = escapeRegExp(sub);
-            // Custom Boundaries: Prevents "SE" from matching inside "SE-R"
-            let boundaryBefore = `(^|[\\s,;\\/\\(\\)])`;
-            let boundaryAfter = `([\\s,;\\/\\(\\)]|$)`;
+                let keep = true;
+                if (includedCyls.length > 0 && !matchingIncluded) keep = false;
+                if (excludedCyls.length > 0 && matchingExcluded) keep = false;
+                return keep;
+            });
             
-            // "except SE-R" or "excluding SE-R"
-            let exceptRegex = new RegExp(`\\b(except|exc\\.?|excluding)\\s+(${escapedSub})${boundaryAfter}`, 'i');
-            // Just "SE-R"
-            let normalRegex = new RegExp(`${boundaryBefore}(${escapedSub})${boundaryAfter}`, 'i');
+            if (filtered.length > 0) {
+                availableVehicles = filtered;
+            } else {
+                errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Catalog lacks vehicles matching Cylinder logic for ${displayModel}.`);
+                failedLines.push(originalLine);
+                return; 
+            }
+        }
 
-            if (exceptRegex.test(cleanNotes)) {
-                excludedSubs.push(sub);
-                cleanNotes = cleanNotes.replace(exceptRegex, '$3'); // Delete the submodel and the word "except", leave trailing punctuation
-            } else if (normalRegex.test(cleanNotes)) {
-                includedSubs.push(sub);
-                cleanNotes = cleanNotes.replace(normalRegex, '$1$3'); // Delete the submodel, leave surrounding punctuation
+        let validDynamicAttrs = [];
+        let allAvailableAttrs = new Set();
+        availableVehicles.forEach(v => {
+            if(v.attrs) v.attrs.forEach(a => allAvailableAttrs.add(a.toUpperCase()));
+        });
+        let sortedAttrs = [...allAvailableAttrs].sort((a,b) => b.length - a.length);
+
+        sortedAttrs.forEach(attr => {
+            let attrRegex = new RegExp(`\\b${escapeRegExp(attr)}\\b`, 'i');
+            if(attrRegex.test(cleanNotes)) {
+                let filtered = availableVehicles.filter(v => v.attrs && v.attrs.some(a => a.toUpperCase() === attr.toUpperCase()));
+                if(filtered.length > 0) {
+                    availableVehicles = filtered;
+                    validDynamicAttrs.push(attrRegex);
+                }
             }
         });
 
-        // Apply Included / Excluded Logic
-        if (includedSubs.length > 0) {
-            availableVehicles = availableVehicles.filter(v => includedSubs.includes(v.sub));
-        }
-        if (excludedSubs.length > 0) {
-            availableVehicles = availableVehicles.filter(v => !excludedSubs.includes(v.sub));
+        let allSubsForModel = new Set();
+        for(let y in dbTree[foundMake][foundModel]) {
+            dbTree[foundMake][foundModel][y].forEach(v => allSubsForModel.add(v.sub.toUpperCase()));
         }
 
-        if (availableVehicles.length === 0) {
-            errorLogs.push(`[Line ${lineNum}] Skipped: Submodel exclusions removed all available vehicles for ${year} ${displayMake} ${displayModel}.`);
-            return;
+        let regexToRemove = new RegExp(`\\b${escapeRegExp(foundModel)}\\b`, 'ig');
+        cleanNotes = cleanNotes.replace(regexToRemove, ' ').trim();
+        cleanNotes = cleanNotes.replace(/\b(VAN|TRUCK|PICKUP)\b/ig, ' ').trim();
+
+        for (let alias of possibleModels) {
+            if (alias !== foundModel && !allSubsForModel.has(alias.toUpperCase())) {
+                let aliasRegex = new RegExp(`\\b${escapeRegExp(alias)}\\b`, 'ig');
+                cleanNotes = cleanNotes.replace(aliasRegex, ' ').trim();
+            }
         }
 
-        // Final scrub of hanging punctuation and abbreviations
+        let allSubsArray = [...allSubsForModel].filter(s => s).sort((a,b) => b.length - a.length);
+        
+        let maskedForSubs = cleanNotes;
+        // Wipe engine strings from mask so they don't corrupt submodel extraction
+        scrubLiterPhrases.forEach(p => { maskedForSubs = maskedForSubs.replace(new RegExp(escapeRegExp(p), 'ig'), ' '); });
+        scrubCylPhrases.forEach(p => { maskedForSubs = maskedForSubs.replace(new RegExp(escapeRegExp(p), 'ig'), ' '); });
+
+        let mentionedSubs = [];
+        let excludedSubs = [];
+
+        allSubsArray.forEach(sub => {
+            let escapedSub = escapeRegExp(sub);
+            let boundaryBefore = `(^|[\\s,;\\/\\(\\)\\-])`;
+            let boundaryAfter = `([\\s,;\\/\\(\\)\\-]|$)`;
+            
+            let exceptRegex = new RegExp(`\\b(?:except|exc\\.?|excluding|not for)\\s+(${escapedSub})${boundaryAfter}`, 'i');
+            let normalRegex = new RegExp(`${boundaryBefore}(${escapedSub})${boundaryAfter}`, 'i');
+
+            if (exceptRegex.test(maskedForSubs)) {
+                excludedSubs.push(sub);
+                maskedForSubs = maskedForSubs.replace(exceptRegex, ' ');
+            } else if (normalRegex.test(maskedForSubs)) {
+                mentionedSubs.push(sub);
+                maskedForSubs = maskedForSubs.replace(normalRegex, ' ');
+            }
+        });
+
+        if (mentionedSubs.length === 0 && excludedSubs.length === 0) {
+            let textWords = maskedForSubs.split(/[\s,;\\/\\(\\)\\-]+/).filter(w => w.length > 2);
+            textWords.forEach(word => {
+                let wordRegex = new RegExp(`\\b${escapeRegExp(word)}\\b`, 'i');
+                allSubsArray.forEach(sub => {
+                    if (wordRegex.test(sub)) {
+                        mentionedSubs.push(sub);
+                        cleanNotes = cleanNotes.replace(wordRegex, ' ');
+                    }
+                });
+            });
+            mentionedSubs = [...new Set(mentionedSubs)];
+        }
+
+        // Scrub extracted elements even if they aren't fully valid to prevent sibling bleed
+        mentionedSubs.forEach(sub => {
+            cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(sub)}\\b`, 'ig'), ' ');
+        });
+        excludedSubs.forEach(sub => {
+            cleanNotes = cleanNotes.replace(new RegExp(`\\b(?:except|exc\\.?|excluding|not for)\\s+${escapeRegExp(sub)}\\b`, 'ig'), ' ');
+        });
+
+        let validMentionedSubs = mentionedSubs.filter(sub => availableVehicles.some(v => v.sub.toUpperCase() === sub.toUpperCase()));
+        let validExcludedSubs = excludedSubs.filter(sub => availableVehicles.some(v => v.sub.toUpperCase() === sub.toUpperCase()));
+
+        if (validMentionedSubs.length > 0) {
+            availableVehicles = availableVehicles.filter(v => validMentionedSubs.some(m => m.toUpperCase() === v.sub.toUpperCase()));
+        } 
+        if (validExcludedSubs.length > 0) {
+            availableVehicles = availableVehicles.filter(v => !validExcludedSubs.some(m => m.toUpperCase() === v.sub.toUpperCase()));
+        }
+
+        // --- THE TARGETED SCRUBBER ---
+        validDynamicAttrs.forEach(regex => {
+            cleanNotes = cleanNotes.replace(regex, ' ');
+        });
+
+        // Use the global arrays to scrub ONLY the exact extracted phrases (e.g. "except 6.4L")
+        scrubLiterPhrases.forEach(phrase => {
+            cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(phrase), 'ig'), ' ');
+        });
+        scrubDrivePhrases.forEach(phrase => {
+            cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(phrase), 'ig'), ' ');
+        });
+        scrubCylPhrases.forEach(phrase => {
+            cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(phrase), 'ig'), ' ');
+        });
+
+        cleanNotes = cleanNotes.replace(/\b(?:Special Edition|Plus)\b/ig, ' ');
+        cleanNotes = cleanNotes.replace(/\ball models\b/ig, ' ');
+        
+        // Removed the "Blind Scrubber" here so "except heavy duty brakes" is safe.
         cleanNotes = cleanNotes.replace(/\b(?:w\/|with)\b/gi, ''); 
+        
+        // Punctuation Sweeper
+        cleanNotes = cleanNotes.replace(/[,;]\s*[,;]+/g, ','); 
+        cleanNotes = cleanNotes.replace(/[,;]\s*(?=\()/g, ' '); 
         cleanNotes = cleanNotes.replace(/^[-\/;,() ]+|[-\/;,() ]+$/g, ''); 
+        cleanNotes = cleanNotes.replace(/(?:\s|^)-+(?:\s|$)/g, ' ');
         cleanNotes = cleanNotes.replace(/\s{2,}/g, ' ').trim(); 
 
         let uniqueVehicleProfiles = [];
@@ -450,7 +660,7 @@ function parseAndGenerate() {
             
             row["Liter"] = vProfile.liter;
             row["Drive Type"] = vProfile.drive;
-            row["Notes"] = cleanNotes;
+            row["Notes"] = cleanNotes; 
             
             if (isRegionLocked) {
                 row["Region"] = regionChoice; 
@@ -467,7 +677,7 @@ function parseAndGenerate() {
     const errorBox = document.getElementById('error-log');
     if (errorLogs.length > 0) {
         errorBox.style.display = 'block';
-        errorBox.innerHTML = `<strong>⚠️ VALIDATION FAILURES:</strong><br>` + errorLogs.join('<br>');
+        errorBox.innerHTML = `<strong>⚠️ PARSER LOGS:</strong><br>` + errorLogs.join('<br>');
     } else {
         errorBox.style.display = 'none';
         errorBox.innerHTML = '';
@@ -475,6 +685,11 @@ function parseAndGenerate() {
 
     if(generatedRows.length > 0) {
         table.addData(generatedRows);
+    }
+    
+    if(failedLines.length > 0) {
+        document.getElementById('rawFitment').value = failedLines.join('\n');
+    } else {
         document.getElementById('rawFitment').value = ""; 
     }
 }
@@ -500,6 +715,36 @@ function exportData() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "FitmentBatch");
     XLSX.writeFile(wb, `Fitment_Batch_${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+
+function copyData() {
+    const rawData = table.getData();
+    if(rawData.length === 0) return alert("Table is empty. Nothing to copy.");
+
+    const exportHeaders = TABLE_COLUMNS.map(c => c.field);
+    
+    let tsvString = "";
+    rawData.forEach((row, index) => {
+        let rowArray = exportHeaders.map(h => {
+            let cellValue = row[h] === undefined || row[h] === null ? "" : String(row[h]);
+            return cellValue.replace(/\t/g, ' ').replace(/\n/g, ' '); 
+        });
+        tsvString += rowArray.join('\t') + (index < rawData.length - 1 ? '\n' : '');
+    });
+
+    navigator.clipboard.writeText(tsvString).then(() => {
+        const copyBtn = document.getElementById('copyBtn');
+        const originalText = copyBtn.innerText;
+        copyBtn.innerText = "✓ COPIED!";
+        copyBtn.style.backgroundColor = "#1e8449"; 
+        setTimeout(() => {
+            copyBtn.innerText = originalText;
+            copyBtn.style.backgroundColor = "#27ae60"; 
+        }, 2000);
+    }).catch(err => {
+        console.error('Could not copy text: ', err);
+        alert("Failed to copy data. Your browser might be blocking clipboard access.");
+    });
 }
 </script>
 </body>
