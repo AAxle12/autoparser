@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Detroit Axle | Fitment Auto-Parser</title>
+    <title>Detroit Axle | Fitment Auto-Parser Pro</title>
     
     <link href="https://unpkg.com/tabulator-tables@5.5.0/dist/css/tabulator_modern.min.css" rel="stylesheet">
     <script src="https://unpkg.com/tabulator-tables@5.5.0/dist/js/tabulator.min.js"></script>
@@ -103,8 +103,8 @@
         <div class="section-title">Raw Fitment Data</div>
         <div class="form-group">
             <label>Paste Text Block Here</label>
-            <textarea id="rawFitment" class="raw-fitment" placeholder="e.g.&#10;2014 DODGE CHALLENGER 3.6L, except 6.4L"></textarea>
-            <span style="font-size: 10px; color: #888; margin-top: 5px;">Targeted Scrubber Active: Protects 'Except' when attached to non-catalog callouts.</span>
+            <textarea id="rawFitment" class="raw-fitment" placeholder="Handles Ranges & Multiple Values: 2012 CHRYSLER 300 AWD, 3.6L, 5.7L"></textarea>
+            <span style="font-size: 10px; color: #888; margin-top: 5px;">Flex-Parser Active: Detects years/ranges anywhere and handles multiple parameters simultaneously.</span>
             <div id="error-log"></div>
         </div>
 
@@ -211,14 +211,14 @@ document.getElementById('db-upload').addEventListener('change', function(e) {
     document.getElementById('loading').style.display = 'flex';
     document.getElementById('loading-msg').innerText = "BUILDING OMNI-DICTIONARY...";
 
-    if (isCSV) {
-        Papa.parse(file, {
-            header: true, skipEmptyLines: true, worker: true,
-            complete: function(results) { buildCompressedTree(results.data); },
-            error: function(err) { alert("Error parsing CSV."); document.getElementById('loading').style.display = 'none'; }
-        });
-    } else {
-        setTimeout(() => {
+    setTimeout(() => {
+        if (isCSV) {
+            Papa.parse(file, {
+                header: true, skipEmptyLines: true, worker: true,
+                complete: function(results) { buildCompressedTree(results.data); },
+                error: function(err) { alert("Error parsing CSV."); document.getElementById('loading').style.display = 'none'; }
+            });
+        } else {
             const reader = new FileReader();
             reader.onload = (evt) => {
                 const wb = XLSX.read(new Uint8Array(evt.target.result), {type: 'array'});
@@ -227,8 +227,8 @@ document.getElementById('db-upload').addEventListener('change', function(e) {
                 buildCompressedTree(data);
             };
             reader.readAsArrayBuffer(file);
-        }, 100);
-    }
+        }
+    }, 100);
 });
 
 function buildCompressedTree(data) {
@@ -342,16 +342,30 @@ function parseAndGenerate() {
         if(!originalLine) return;
         if(/^\d{4}$/.test(originalLine)) return; 
 
-        let yearMatch = originalLine.match(/^(\d{4})\s+(.*)/);
-        if(!yearMatch) {
-            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Valid Year not found.`);
+        // 1. EXTRACT YEAR / RANGE
+        let years = [];
+        let yearPattern = /\b(\d{4})(?:\s*-\s*(\d{4}|\d{2}))?\b/g;
+        let yMatch;
+        let lineStrippedYears = originalLine;
+
+        while ((yMatch = yearPattern.exec(originalLine)) !== null) {
+            let start = parseInt(yMatch[1]);
+            let end = yMatch[2] ? (yMatch[2].length === 2 ? Math.floor(start/100)*100 + parseInt(yMatch[2]) : parseInt(yMatch[2])) : start;
+            let low = Math.min(start, end);
+            let high = Math.max(start, end);
+            for(let i=low; i<=high; i++) years.push(String(i));
+            lineStrippedYears = lineStrippedYears.replace(yMatch[0], ' ');
+        }
+        years = [...new Set(years)];
+        
+        if(years.length === 0) {
+            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Valid Year/Range not found.`);
             failedLines.push(originalLine);
             return; 
         }
         
-        let year = yearMatch[1];
-        let remainderUpper = yearMatch[2].trim().toUpperCase();
-        let remainderOriginal = yearMatch[2].trim(); 
+        let remainderUpper = lineStrippedYears.toUpperCase();
+        let remainderOriginal = lineStrippedYears; 
 
         const exclusionPattern = `\\b(?:except|exc\\.?|excluding|not for)\\s+`;
 
@@ -404,14 +418,18 @@ function parseAndGenerate() {
             }
         }
 
+        // Help the make/model parser by temporarily scrubbing engine phrases
+        let textForMakeModel = remainderUpper;
+        [...scrubLiterPhrases, ...scrubDrivePhrases, ...scrubCylPhrases].forEach(p => {
+            textForMakeModel = textForMakeModel.replace(new RegExp(escapeRegExp(p), 'ig'), ' ');
+        });
+        textForMakeModel = textForMakeModel.replace(/\s+/g, ' ').trim();
+
         let foundMake = "";
-        let originalRemainderMake = remainderUpper;
         for(let m of knownMakes) {
-            let makeRegex = new RegExp(`^${escapeRegExp(m)}\\b`, 'i');
-            if(makeRegex.test(originalRemainderMake)) { 
+            let makeRegex = new RegExp(`\\b${escapeRegExp(m)}\\b`, 'i');
+            if(makeRegex.test(textForMakeModel)) { 
                 foundMake = m; 
-                remainderUpper = originalRemainderMake.replace(makeRegex, '').trim(); 
-                remainderOriginal = remainderOriginal.replace(makeRegex, '').trim();
                 break; 
             }
         }
@@ -422,32 +440,15 @@ function parseAndGenerate() {
             return;
         }
 
-        let modelSearchString = remainderUpper.replace(/\b(VAN|TRUCK|PICKUP)\b/ig, ' ').replace(/\s+/g, ' ').trim();
-        let knownModels = Object.keys(dbTree[foundMake]);
-        let possibleModels = [];
-        
-        for(let md of knownModels) {
+        let afterMakeText = textForMakeModel.replace(new RegExp(`\\b${escapeRegExp(foundMake)}\\b`, 'i'), ' ').trim();
+        let knownModels = Object.keys(dbTree[foundMake]).sort((a,b) => b.length - a.length);
+        let foundModel = knownModels.find(md => {
             let regex = new RegExp(`\\b${escapeRegExp(md)}\\b`, 'i');
-            if(regex.test(modelSearchString)) {
-                possibleModels.push(md);
-            }
-        }
-        possibleModels.sort((a,b) => b.length - a.length);
-
-        let foundModel = "";
-        let fallbackModel = possibleModels.length > 0 ? possibleModels[0] : "";
-        
-        for(let md of possibleModels) {
-            if(dbTree[foundMake][md] && dbTree[foundMake][md][year]) {
-                foundModel = md; 
-                break; 
-            }
-        }
+            return regex.test(afterMakeText);
+        });
 
         if(!foundModel) {
-            let errorModelDisplay = fallbackModel ? fallbackModel.split(' ').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ') : "Unknown Model";
-            let displayMake = foundMake.charAt(0) + foundMake.slice(1).toLowerCase();
-            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: ${year} ${displayMake} ${errorModelDisplay} does not exist in catalog.`);
+            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Unknown Model for ${foundMake}.`);
             failedLines.push(originalLine);
             return;
         }
@@ -455,44 +456,45 @@ function parseAndGenerate() {
         let displayMake = foundMake.charAt(0) + foundMake.slice(1).toLowerCase();
         let displayModel = foundModel.split(' ').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
 
-        let availableVehicles = dbTree[foundMake][foundModel][year] || [];
+        // Aggregate vehicle pools across all requested years
+        let availableVehicles = [];
+        years.forEach(yr => {
+            if (dbTree[foundMake][foundModel] && dbTree[foundMake][foundModel][yr]) {
+                let pool = dbTree[foundMake][foundModel][yr].map(v => ({...v, year: yr}));
+                availableVehicles.push(...pool);
+            }
+        });
+
+        if (availableVehicles.length === 0) {
+            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Selected years do not exist for ${foundMake} ${foundModel}.`);
+            failedLines.push(originalLine);
+            return;
+        }
+
         let cleanNotes = remainderOriginal; 
 
-        // --- APPLY GLOBAL HARD FILTERS ---
+        // --- APPLY MULTI-ITEM FILTERS TO VEHICLE POOL ---
+        
         if (includedLiters.length > 0 || excludedLiters.length > 0) {
-            let filtered = availableVehicles.filter(v => {
+            availableVehicles = availableVehicles.filter(v => {
                 let keep = true;
                 if (includedLiters.length > 0 && !includedLiters.includes(v.liter)) keep = false;
                 if (excludedLiters.length > 0 && excludedLiters.includes(v.liter)) keep = false;
                 return keep;
             });
-            if (filtered.length > 0) {
-                availableVehicles = filtered;
-            } else {
-                errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Catalog lacks vehicles matching Liter logic for ${displayModel}.`);
-                failedLines.push(originalLine);
-                return;
-            }
         }
 
         if (includedDrives.length > 0 || excludedDrives.length > 0) {
-            let filtered = availableVehicles.filter(v => {
+            availableVehicles = availableVehicles.filter(v => {
                 let keep = true;
                 if (includedDrives.length > 0 && !includedDrives.some(d => v.drive.includes(d))) keep = false;
                 if (excludedDrives.length > 0 && excludedDrives.some(d => v.drive.includes(d))) keep = false;
                 return keep;
             });
-            if (filtered.length > 0) {
-                availableVehicles = filtered;
-            } else {
-                errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Catalog lacks vehicles matching Drive logic for ${displayModel}.`);
-                failedLines.push(originalLine);
-                return;
-            }
         }
         
         if (includedCyls.length > 0 || excludedCyls.length > 0) {
-            let filtered = availableVehicles.filter(v => {
+            availableVehicles = availableVehicles.filter(v => {
                 let checkCylMatch = (cylArray) => {
                     for (let extCyl of cylArray) {
                         if (v.cyl && String(v.cyl).trim() === extCyl) return true;
@@ -512,51 +514,28 @@ function parseAndGenerate() {
                 if (excludedCyls.length > 0 && matchingExcluded) keep = false;
                 return keep;
             });
-            
-            if (filtered.length > 0) {
-                availableVehicles = filtered;
-            } else {
-                errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Catalog lacks vehicles matching Cylinder logic for ${displayModel}.`);
-                failedLines.push(originalLine);
-                return; 
-            }
         }
 
-        let validDynamicAttrs = [];
-        let allAvailableAttrs = new Set();
-        availableVehicles.forEach(v => {
-            if(v.attrs) v.attrs.forEach(a => allAvailableAttrs.add(a.toUpperCase()));
-        });
-        let sortedAttrs = [...allAvailableAttrs].sort((a,b) => b.length - a.length);
-
-        sortedAttrs.forEach(attr => {
-            let attrRegex = new RegExp(`\\b${escapeRegExp(attr)}\\b`, 'i');
-            if(attrRegex.test(cleanNotes)) {
-                let filtered = availableVehicles.filter(v => v.attrs && v.attrs.some(a => a.toUpperCase() === attr.toUpperCase()));
-                if(filtered.length > 0) {
-                    availableVehicles = filtered;
-                    validDynamicAttrs.push(attrRegex);
-                }
-            }
-        });
+        if (availableVehicles.length === 0) {
+            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Hard filters eliminated all vehicles for ${displayModel}.`);
+            failedLines.push(originalLine);
+            return;
+        }
 
         let allSubsForModel = new Set();
-        for(let y in dbTree[foundMake][foundModel]) {
-            dbTree[foundMake][foundModel][y].forEach(v => allSubsForModel.add(v.sub.toUpperCase()));
-        }
-
-        let regexToRemove = new RegExp(`\\b${escapeRegExp(foundModel)}\\b`, 'ig');
-        cleanNotes = cleanNotes.replace(regexToRemove, ' ').trim();
-        cleanNotes = cleanNotes.replace(/\b(VAN|TRUCK|PICKUP)\b/ig, ' ').trim();
-
-        for (let alias of possibleModels) {
-            if (alias !== foundModel && !allSubsForModel.has(alias.toUpperCase())) {
-                let aliasRegex = new RegExp(`\\b${escapeRegExp(alias)}\\b`, 'ig');
-                cleanNotes = cleanNotes.replace(aliasRegex, ' ').trim();
+        years.forEach(yr => {
+            if (dbTree[foundMake][foundModel] && dbTree[foundMake][foundModel][yr]) {
+                dbTree[foundMake][foundModel][yr].forEach(v => allSubsForModel.add(v.sub.toUpperCase()));
             }
-        }
-
+        });
         let allSubsArray = [...allSubsForModel].filter(s => s).sort((a,b) => b.length - a.length);
+
+        // Prep cleanNotes for Submodel detection
+        let regexToRemoveMake = new RegExp(`\\b${escapeRegExp(foundMake)}\\b`, 'ig');
+        let regexToRemoveModel = new RegExp(`\\b${escapeRegExp(foundModel)}\\b`, 'ig');
+        cleanNotes = cleanNotes.replace(regexToRemoveMake, ' ').trim();
+        cleanNotes = cleanNotes.replace(regexToRemoveModel, ' ').trim();
+        cleanNotes = cleanNotes.replace(/\b(VAN|TRUCK|PICKUP)\b/ig, ' ').trim();
         
         let maskedForSubs = cleanNotes;
         // Wipe engine strings from mask so they don't corrupt submodel extraction
@@ -590,20 +569,12 @@ function parseAndGenerate() {
                 allSubsArray.forEach(sub => {
                     if (wordRegex.test(sub)) {
                         mentionedSubs.push(sub);
-                        cleanNotes = cleanNotes.replace(wordRegex, ' ');
+                        maskedForSubs = maskedForSubs.replace(wordRegex, ' ');
                     }
                 });
             });
             mentionedSubs = [...new Set(mentionedSubs)];
         }
-
-        // Scrub extracted elements even if they aren't fully valid to prevent sibling bleed
-        mentionedSubs.forEach(sub => {
-            cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(sub)}\\b`, 'ig'), ' ');
-        });
-        excludedSubs.forEach(sub => {
-            cleanNotes = cleanNotes.replace(new RegExp(`\\b(?:except|exc\\.?|excluding|not for)\\s+${escapeRegExp(sub)}\\b`, 'ig'), ' ');
-        });
 
         let validMentionedSubs = mentionedSubs.filter(sub => availableVehicles.some(v => v.sub.toUpperCase() === sub.toUpperCase()));
         let validExcludedSubs = excludedSubs.filter(sub => availableVehicles.some(v => v.sub.toUpperCase() === sub.toUpperCase()));
@@ -615,9 +586,13 @@ function parseAndGenerate() {
             availableVehicles = availableVehicles.filter(v => !validExcludedSubs.some(m => m.toUpperCase() === v.sub.toUpperCase()));
         }
 
-        // --- THE TARGETED SCRUBBER ---
-        validDynamicAttrs.forEach(regex => {
-            cleanNotes = cleanNotes.replace(regex, ' ');
+        // --- FINAL SCRUBBER ---
+        
+        validMentionedSubs.forEach(sub => {
+            cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(sub)}\\b`, 'ig'), ' ');
+        });
+        validExcludedSubs.forEach(sub => {
+            cleanNotes = cleanNotes.replace(new RegExp(`\\b(?:except|exc\\.?|excluding|not for)\\s+${escapeRegExp(sub)}\\b`, 'ig'), ' ');
         });
 
         // Use the global arrays to scrub ONLY the exact extracted phrases (e.g. "except 6.4L")
@@ -633,8 +608,6 @@ function parseAndGenerate() {
 
         cleanNotes = cleanNotes.replace(/\b(?:Special Edition|Plus)\b/ig, ' ');
         cleanNotes = cleanNotes.replace(/\ball models\b/ig, ' ');
-        
-        // Removed the "Blind Scrubber" here so "except heavy duty brakes" is safe.
         cleanNotes = cleanNotes.replace(/\b(?:w\/|with)\b/gi, ''); 
         
         // Punctuation Sweeper
@@ -647,13 +620,13 @@ function parseAndGenerate() {
         let uniqueVehicleProfiles = [];
         let seenSet = new Set();
         availableVehicles.forEach(v => {
-            let key = `${v.sub}|${v.liter}|${v.drive}|${v.brake}|${v.region}`;
+            let key = `${v.year}|${v.sub}|${v.liter}|${v.drive}|${v.brake}|${v.region}`;
             if(!seenSet.has(key)) { seenSet.add(key); uniqueVehicleProfiles.push(v); }
         });
 
         uniqueVehicleProfiles.forEach(vProfile => {
             let row = Object.assign({}, staticData);
-            row["Year"] = year;
+            row["Year"] = vProfile.year;
             row["Make"] = displayMake;
             row["Model"] = displayModel;
             row["Sub-Model"] = vProfile.sub;
