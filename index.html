@@ -103,8 +103,8 @@
         <div class="section-title">Raw Fitment Data</div>
         <div class="form-group">
             <label>Paste Text Block Here</label>
-            <textarea id="rawFitment" class="raw-fitment" placeholder="Handles Safe Notes: 2018 Chevy Silverado 1500 excludes heavy duty brakes"></textarea>
-            <span style="font-size: 10px; color: #888; margin-top: 5px;">Pure Note Engine Active: Protects year boundaries (1500/2500 safe) and safeguards descriptive exclusions.</span>
+            <textarea id="rawFitment" class="raw-fitment" placeholder="Handles Semicolons: C, Base; RWD"></textarea>
+            <span style="font-size: 10px; color: #888; margin-top: 5px;">Semicolon Fold Engine Active: Detects independent vehicle definitions vs parameter distributions.</span>
             <div id="error-log"></div>
         </div>
 
@@ -308,7 +308,7 @@ function buildCompressedTree(data) {
 
 function escapeRegExp(string) { return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-// 🛡️ FATAL ERROR CATCHER: Prevents the button from "doing nothing"
+// 🛡️ FATAL ERROR CATCHER
 function tryParseAndGenerate() {
     try {
         parseAndGenerate();
@@ -316,7 +316,7 @@ function tryParseAndGenerate() {
         console.error(err);
         const errorBox = document.getElementById('error-log');
         errorBox.style.display = 'block';
-        errorBox.innerHTML = `<strong>⚠️ CRITICAL JAVASCRIPT ERROR:</strong><br>${err.message}<br>Check the console for details or report this to engineering.`;
+        errorBox.innerHTML = `<strong>⚠️ CRITICAL JAVASCRIPT ERROR:</strong><br>${err.message}<br>Check the console for details.`;
     }
 }
 
@@ -354,7 +354,7 @@ function parseAndGenerate() {
         if(!originalLine) return;
         if(/^\d{4}$/.test(originalLine)) return; 
 
-        // 1. EXTRACT YEAR / RANGE (CENTURY LOCKED TO PREVENT 1500/2500 HIJACK)
+        // 1. EXTRACT YEAR / RANGE (CENTURY LOCKED)
         let years = [];
         let yearPattern = /(?:^|[\s,;/\(\)\-])(19[5-9]\d|20[0-4]\d)(?:\s*-\s*(19[5-9]\d|20[0-4]\d|\d{2}))?(?=[\s,;/\(\)\-]|$)/g;
         let yMatch;
@@ -379,68 +379,28 @@ function parseAndGenerate() {
         let remainderUpper = lineStrippedYears.toUpperCase();
         let remainderOriginal = lineStrippedYears; 
 
-        const exclusionPattern = `\\b(?:except|exc\\.?|excluding|exclude|excludes|not for)\\s+`;
+        // EXPANDED EXCLUSIONS
+        const exclusionPattern = `\\b(?:except|exc\\.?|excluding|exclude|excludes|not for|without|w\\/o)\\s+`;
 
-        // --- GLOBAL ARRAY EXTRACTION FOR LITERS ---
-        let literRegex = new RegExp(`(${exclusionPattern})?(\\d\\.\\d)\\s*(?:L|liter|liters)\\b`, 'ig');
-        let includedLiters = [];
-        let excludedLiters = [];
-        let scrubLiterPhrases = [];
-        let lMatch;
-        while ((lMatch = literRegex.exec(remainderUpper)) !== null) {
-            scrubLiterPhrases.push(lMatch[0]);
-            let val = parseFloat(lMatch[2]).toFixed(1);
-            if (lMatch[1]) excludedLiters.push(val);
-            else includedLiters.push(val);
-        }
-
-        // --- GLOBAL ARRAY EXTRACTION FOR DRIVES ---
-        let driveRegex = new RegExp(`(${exclusionPattern})?(FWD|RWD|AWD|4WD|4X4|2WD)\\b`, 'ig');
-        let includedDrives = [];
-        let excludedDrives = [];
-        let scrubDrivePhrases = [];
-        let dMatch;
-        while ((dMatch = driveRegex.exec(remainderUpper)) !== null) {
-            scrubDrivePhrases.push(dMatch[0]);
-            let val = dMatch[2].toUpperCase();
-            if (val === "2WD") val = "RWD";
-            if (dMatch[1]) excludedDrives.push(val);
-            else includedDrives.push(val);
-        }
-        
-        // --- GLOBAL ARRAY EXTRACTION FOR CYLINDERS ---
-        let cylRegex = new RegExp(`(${exclusionPattern})?(V-?6|V-?8|V-?10|V-?12|\\d{1,2}\\s*CYL(?:INDER)?S?|I-?4|I-?6|L-?4|L-?6)\\b`, 'ig');
-        let includedCyls = [];
-        let excludedCyls = [];
-        let scrubCylPhrases = [];
-        let cMatch;
-        while ((cMatch = cylRegex.exec(remainderUpper)) !== null) {
-            scrubCylPhrases.push(cMatch[0]);
-            let s = cMatch[2].toUpperCase().replace(/[-\s]/g, '');
-            let val = "";
-            if (s.includes('4')) val = "4";
-            else if (s.includes('6')) val = "6";
-            else if (s.includes('8')) val = "8";
-            else if (s.includes('10')) val = "10";
-            else if (s.includes('12')) val = "12";
-            
-            if (val) {
-                if (cMatch[1]) excludedCyls.push(val);
-                else includedCyls.push(val);
-            }
-        }
+        // --- GLOBAL ARRAY EXTRACTION FOR SCRUBBING NOISE ---
+        let scrubPhrasesForMakeModel = [];
+        let tempLRegex = /(\d\.\d)\s*(?:L|liter|liters)\b/ig;
+        let lMatch; while ((lMatch = tempLRegex.exec(remainderUpper)) !== null) scrubPhrasesForMakeModel.push(lMatch[0]);
+        let tempDRegex = /(FWD|RWD|AWD|4WD|4X4|2WD)\b/ig;
+        let dMatch; while ((dMatch = tempDRegex.exec(remainderUpper)) !== null) scrubPhrasesForMakeModel.push(dMatch[0]);
+        let tempCRegex = /(V-?6|V-?8|V-?10|V-?12|\d{1,2}\s*CYL(?:INDER)?S?|I-?4|I-?6|L-?4|L-?6)\b/ig;
+        let cMatch; while ((cMatch = tempCRegex.exec(remainderUpper)) !== null) scrubPhrasesForMakeModel.push(cMatch[0]);
 
         // Help the make/model parser by temporarily scrubbing engine phrases
         let textForMakeModel = remainderUpper;
-        [...scrubLiterPhrases, ...scrubDrivePhrases, ...scrubCylPhrases].forEach(p => { 
+        scrubPhrasesForMakeModel.forEach(p => { 
             textForMakeModel = textForMakeModel.replace(new RegExp(escapeRegExp(p), 'ig'), ' '); 
         });
         
         // Wipe logic words so they don't break Make/Model detection
-        textForMakeModel = textForMakeModel.replace(/\b(?:OR|except|exc\.?|excluding|exclude|excludes|not for|with|w\/|include|includes|including)\b/ig, ' ');
+        textForMakeModel = textForMakeModel.replace(/\b(?:OR|except|exc\.?|excluding|exclude|excludes|not for|without|w\/o|with|w\/|include|includes|including)\b/ig, ' ');
         textForMakeModel = textForMakeModel.replace(/\s+/g, ' ').trim();
 
-        // 🛡️ AUTO-ALIAS DICTIONARY: Translates Slang to DB Names
         textForMakeModel = textForMakeModel.replace(/\bCHEVY\b/ig, 'CHEVROLET');
         textForMakeModel = textForMakeModel.replace(/\bVW\b/ig, 'VOLKSWAGEN');
         textForMakeModel = textForMakeModel.replace(/\bINFINITY\b/ig, 'INFINITI');
@@ -455,7 +415,7 @@ function parseAndGenerate() {
         }
         
         if(!foundMake) {
-            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Unknown Make. Could not map [${originalLine}] to DB.`);
+            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Unknown Make. Could not map to DB.`);
             failedLines.push(originalLine);
             return;
         }
@@ -464,7 +424,6 @@ function parseAndGenerate() {
         let knownModels = Object.keys(dbTree[foundMake]).sort((a,b) => b.length - a.length);
         
         let foundModel = "";
-        // PREVENT CANNIBALIZATION: Verify Model actually exists in the requested Years
         for (let md of knownModels) {
             let regex = new RegExp(`\\b${escapeRegExp(md)}\\b`, 'i');
             if (regex.test(afterMakeText)) {
@@ -518,17 +477,52 @@ function parseAndGenerate() {
         });
         let allSubsArray = [...allSubsForModel].filter(s => s).sort((a,b) => b.length - a.length);
 
-        // --- CONTEXT-AWARE LOGIC SPLITTER & OR GATE ENGINE ---
-        let splitPattern = /\b(?:except|exc\.?|excluding|exclude|excludes|not for)\b/i;
+        // Submodel helper func
+        function hasSubmodels(text, subsArray) {
+            for (let sub of subsArray) {
+                let regex = new RegExp(`(^|[\\s,;\\/\\(\\)\\-])(${escapeRegExp(sub)})([\\s,;\\/\\(\\)\\-]|$)`, 'i');
+                if (regex.test(text)) return true;
+            }
+            return false;
+        }
+
+        // --- CONTEXT-AWARE LOGIC SPLITTER & SEMICOLON FOLD ENGINE ---
+        let splitPattern = /\b(?:except|exc\.?|excluding|exclude|excludes|not for|without|w\/o)\b/i;
         let textSegments = remainderUpper.split(splitPattern);
         
         let includeSegmentRaw = textSegments[0] || "";
         let excludeSegments = textSegments.slice(1);
 
+        // Split Included segment by OR to create independent Logic Gates
         let orPattern = /\bOR\b/i;
-        let orSegments = includeSegmentRaw.split(orPattern);
+        let rawOrSegments = includeSegmentRaw.split(orPattern);
+        
+        let finalLogicGates = [];
+        
+        // ✨ SEMICOLON FOLD LOGIC
+        rawOrSegments.forEach(orSeg => {
+            let semiSegments = orSeg.split(';');
+            let currentGateText = "";
+            
+            for (let i = 0; i < semiSegments.length; i++) {
+                let seg = semiSegments[i];
+                if (currentGateText === "") {
+                    currentGateText = seg;
+                } else if (hasSubmodels(seg, allSubsArray)) {
+                    // It has submodels, meaning it's an independent vehicle description (OR gate)
+                    finalLogicGates.push(currentGateText);
+                    currentGateText = seg;
+                } else {
+                    // It has NO submodels, meaning it is a modifier for the previous text (AND gate)
+                    currentGateText += " " + seg;
+                }
+            }
+            if (currentGateText.trim() !== "") {
+                finalLogicGates.push(currentGateText);
+            }
+        });
 
-        // 🛡️ EVALUATION ENGINE with NO_PARAMS Note Protection
+        // 🛡️ EVALUATION ENGINE
         function evaluateVehicle(v, text) {
             if (!text.trim()) return 'NO_PARAMS';
 
@@ -561,7 +555,7 @@ function parseAndGenerate() {
                 }
             });
 
-            // 🛡️ PURE NOTE PROTECTOR: If it found zero math variables, it flags as NO_PARAMS to let it pass safely
+            // If zero math variables were parsed, it's a pure note ('heavy duty brakes'). Let it pass safely.
             let paramCount = liters.length + drives.length + subs.length + cyls.length;
             if (paramCount === 0) return 'NO_PARAMS';
 
@@ -588,13 +582,11 @@ function parseAndGenerate() {
             let matchesInclude = false;
             let includeHadParams = false;
 
-            for (let orText of orSegments) {
-                let res = evaluateVehicle(v, orText);
+            for (let gateText of finalLogicGates) {
+                let res = evaluateVehicle(v, gateText);
                 if (res !== 'NO_PARAMS') includeHadParams = true;
                 if (res === true || res === 'NO_PARAMS') {
                     matchesInclude = true;
-                    // Note: We don't 'break' immediately if we want to ensure other logic gates are valid, 
-                    // but since it's an OR, finding one valid TRUE is enough.
                     break;
                 }
             }
@@ -605,9 +597,9 @@ function parseAndGenerate() {
             for (let exText of excludeSegments) {
                 if (!exText.trim()) continue;
                 let res = evaluateVehicle(v, exText);
-                // If it returned true, it means it mathematically MATCHED an excluded parameter. Kill it!
+                // If it returned true, it mathematically MATCHED an excluded parameter. Kill it!
                 if (res === true) return false; 
-                // If it returned NO_PARAMS, it's just a pure note (like 'heavy duty brakes'). Let it pass safely!
+                // If it returned NO_PARAMS, it's just a pure note. Let it pass safely!
             }
 
             return true;
@@ -643,7 +635,6 @@ function parseAndGenerate() {
 
         // Scrub Make and Model
         cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(foundMake)}\\b`, 'ig'), ' ').trim();
-        // Handle the original 'Chevy' etc. so they don't stay in notes
         cleanNotes = cleanNotes.replace(/\bCHEVY\b/ig, ' ').trim();
         cleanNotes = cleanNotes.replace(/\bVW\b/ig, ' ').trim();
         cleanNotes = cleanNotes.replace(/\bINFINITY\b/ig, ' ').trim();
@@ -655,12 +646,15 @@ function parseAndGenerate() {
         });
 
         // Only scrub logic terms that accurately captured a catalog parameter. Protects descriptive exclusions!
-        scrubLiterPhrases.forEach(phrase => { cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(phrase), 'ig'), ' '); });
-        scrubDrivePhrases.forEach(phrase => { cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(phrase), 'ig'), ' '); });
-        scrubCylPhrases.forEach(phrase => { cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(phrase), 'ig'), ' '); });
+        let scrubLiterRegex = /(\d\.\d)\s*(?:L|liter|liters)\b/ig;
+        let cleanLMatch; while ((cleanLMatch = scrubLiterRegex.exec(includeSegmentRaw)) !== null) cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(cleanLMatch[0]), 'ig'), ' ');
+        let scrubDriveRegex = /(FWD|RWD|AWD|4WD|4X4|2WD)\b/ig;
+        let cleanDMatch; while ((cleanDMatch = scrubDriveRegex.exec(includeSegmentRaw)) !== null) cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(cleanDMatch[0]), 'ig'), ' ');
+        let scrubCylRegex = /(V-?6|V-?8|V-?10|V-?12|\d{1,2}\s*CYL(?:INDER)?S?|I-?4|I-?6|L-?4|L-?6)\b/ig;
+        let cleanCMatch; while ((cleanCMatch = scrubCylRegex.exec(includeSegmentRaw)) !== null) cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(cleanCMatch[0]), 'ig'), ' ');
 
         allSubsArray.forEach(sub => {
-            let excSubRegex = new RegExp(`\\b(?:except|exc\\.?|excluding|exclude|excludes|not for)\\s+${escapeRegExp(sub)}\\b`, 'ig');
+            let excSubRegex = new RegExp(`\\b(?:except|exc\\.?|excluding|exclude|excludes|not for|without|w\\/o)\\s+${escapeRegExp(sub)}\\b`, 'ig');
             cleanNotes = cleanNotes.replace(excSubRegex, ' ');
             let normSubRegex = new RegExp(`(^|[\\s,;\\/\\(\\)\\-])(${escapeRegExp(sub)})([\\s,;\\/\\(\\)\\-]|$)`, 'ig');
             cleanNotes = cleanNotes.replace(normSubRegex, ' ');
