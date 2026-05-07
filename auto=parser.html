@@ -48,7 +48,7 @@
         
         textarea.raw-fitment { min-height: 220px; font-family: monospace; font-size: 12px; line-height: 1.4; resize: vertical;}
 
-        #error-log { display: none; background: var(--danger-light); border: 1px solid var(--da-red); color: var(--da-red); padding: 10px; border-radius: 4px; font-size: 11px; margin-top: 10px; max-height: 150px; overflow-y: auto; font-family: monospace;}
+        #error-log { display: none; background: var(--danger-light); border: 1px solid var(--da-red); color: var(--da-red); padding: 15px; border-radius: 6px; font-size: 12px; margin-top: 15px; max-height: 200px; overflow-y: auto; font-family: monospace; font-weight: bold; box-shadow: 0 0 10px rgba(211, 17, 69, 0.2);}
 
         button { cursor: pointer; padding: 12px; border: none; border-radius: 5px; font-weight: bold; color: white; transition: 0.2s; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 5px;}
         button:hover { transform: translateY(-1px); filter: brightness(1.1); box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
@@ -78,7 +78,7 @@
 <body>
 
 <header>
-    <div class="logo">DETROIT <span>AXLE</span> | FITMENT AUTO-PARSER</div>
+    <div class="logo">DETROIT <span>AXLE</span> | FITMENT AUTO-PARSER PRO</div>
     <div style="display: flex; gap: 10px;">
         <button class="btn-dark" onclick="table.clearData()">🧹 CLEAR TABLE</button>
         <button class="btn-green" id="copyBtn" onclick="copyData()" style="width: auto; padding: 10px 20px;">📋 COPY DATA</button>
@@ -88,6 +88,7 @@
 
 <div class="main-layout">
     <div class="generator-panel">
+        
         <div class="upload-box" onclick="document.getElementById('db-upload').click()">
             <span id="upload-txt">1. UPLOAD MASTER VEHICLE DB (.CSV)</span>
             <input type="file" id="db-upload" style="display:none" accept=".csv, .xlsx, .xls">
@@ -102,8 +103,8 @@
         <div class="section-title">Raw Fitment Data</div>
         <div class="form-group">
             <label>Paste Text Block Here</label>
-            <textarea id="rawFitment" class="raw-fitment" placeholder="Handles Multiple Vocab: 2005 Chrysler 300 w/ 5.7L excludes AWD"></textarea>
-            <span style="font-size: 10px; color: #888; margin-top: 5px;">Context-Aware Splitter Active: Correctly handles compound exclusions (excludes, not for) and scrubs inclusions (with, including).</span>
+            <textarea id="rawFitment" class="raw-fitment" placeholder="Handles Safe Notes: 2018 Chevy Silverado 1500 excludes heavy duty brakes"></textarea>
+            <span style="font-size: 10px; color: #888; margin-top: 5px;">Pure Note Engine Active: Protects year boundaries (1500/2500 safe) and safeguards descriptive exclusions.</span>
             <div id="error-log"></div>
         </div>
 
@@ -136,7 +137,7 @@
             <input type="text" id="link3" placeholder="Source Link 3">
         </div>
 
-        <button class="btn-red" onclick="parseAndGenerate()">⚡ PARSE & GENERATE ROWS</button>
+        <button class="btn-red" onclick="tryParseAndGenerate()">⚡ PARSE & GENERATE ROWS</button>
     </div>
 
     <div class="table-container">
@@ -307,6 +308,18 @@ function buildCompressedTree(data) {
 
 function escapeRegExp(string) { return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
+// 🛡️ FATAL ERROR CATCHER: Prevents the button from "doing nothing"
+function tryParseAndGenerate() {
+    try {
+        parseAndGenerate();
+    } catch (err) {
+        console.error(err);
+        const errorBox = document.getElementById('error-log');
+        errorBox.style.display = 'block';
+        errorBox.innerHTML = `<strong>⚠️ CRITICAL JAVASCRIPT ERROR:</strong><br>${err.message}<br>Check the console for details or report this to engineering.`;
+    }
+}
+
 function parseAndGenerate() {
     if (knownMakes.length === 0) return alert("Please upload the Master CSV Database first.");
     
@@ -341,9 +354,9 @@ function parseAndGenerate() {
         if(!originalLine) return;
         if(/^\d{4}$/.test(originalLine)) return; 
 
-        // 1. EXTRACT YEAR / RANGE
+        // 1. EXTRACT YEAR / RANGE (CENTURY LOCKED TO PREVENT 1500/2500 HIJACK)
         let years = [];
-        let yearPattern = /\b(\d{4})(?:\s*-\s*(\d{4}|\d{2}))?\b/g;
+        let yearPattern = /(?:^|[\s,;/\(\)\-])(19[5-9]\d|20[0-4]\d)(?:\s*-\s*(19[5-9]\d|20[0-4]\d|\d{2}))?(?=[\s,;/\(\)\-]|$)/g;
         let yMatch;
         let lineStrippedYears = originalLine;
 
@@ -366,7 +379,6 @@ function parseAndGenerate() {
         let remainderUpper = lineStrippedYears.toUpperCase();
         let remainderOriginal = lineStrippedYears; 
 
-        // Expanded Exclusion Vocabulary
         const exclusionPattern = `\\b(?:except|exc\\.?|excluding|exclude|excludes|not for)\\s+`;
 
         // --- GLOBAL ARRAY EXTRACTION FOR LITERS ---
@@ -420,10 +432,18 @@ function parseAndGenerate() {
 
         // Help the make/model parser by temporarily scrubbing engine phrases
         let textForMakeModel = remainderUpper;
-        scrubLiterPhrases.forEach(p => { textForMakeModel = textForMakeModel.replace(new RegExp(escapeRegExp(p), 'ig'), ' '); });
-        scrubDrivePhrases.forEach(p => { textForMakeModel = textForMakeModel.replace(new RegExp(escapeRegExp(p), 'ig'), ' '); });
-        scrubCylPhrases.forEach(p => { textForMakeModel = textForMakeModel.replace(new RegExp(escapeRegExp(p), 'ig'), ' '); });
+        [...scrubLiterPhrases, ...scrubDrivePhrases, ...scrubCylPhrases].forEach(p => { 
+            textForMakeModel = textForMakeModel.replace(new RegExp(escapeRegExp(p), 'ig'), ' '); 
+        });
+        
+        // Wipe logic words so they don't break Make/Model detection
+        textForMakeModel = textForMakeModel.replace(/\b(?:OR|except|exc\.?|excluding|exclude|excludes|not for|with|w\/|include|includes|including)\b/ig, ' ');
         textForMakeModel = textForMakeModel.replace(/\s+/g, ' ').trim();
+
+        // 🛡️ AUTO-ALIAS DICTIONARY: Translates Slang to DB Names
+        textForMakeModel = textForMakeModel.replace(/\bCHEVY\b/ig, 'CHEVROLET');
+        textForMakeModel = textForMakeModel.replace(/\bVW\b/ig, 'VOLKSWAGEN');
+        textForMakeModel = textForMakeModel.replace(/\bINFINITY\b/ig, 'INFINITI');
 
         let foundMake = "";
         for(let m of knownMakes) {
@@ -435,17 +455,36 @@ function parseAndGenerate() {
         }
         
         if(!foundMake) {
-            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Unknown Make.`);
+            errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Unknown Make. Could not map [${originalLine}] to DB.`);
             failedLines.push(originalLine);
             return;
         }
 
         let afterMakeText = textForMakeModel.replace(new RegExp(`\\b${escapeRegExp(foundMake)}\\b`, 'i'), ' ').trim();
         let knownModels = Object.keys(dbTree[foundMake]).sort((a,b) => b.length - a.length);
-        let foundModel = knownModels.find(md => {
+        
+        let foundModel = "";
+        // PREVENT CANNIBALIZATION: Verify Model actually exists in the requested Years
+        for (let md of knownModels) {
             let regex = new RegExp(`\\b${escapeRegExp(md)}\\b`, 'i');
-            return regex.test(afterMakeText);
-        });
+            if (regex.test(afterMakeText)) {
+                let existsInYears = years.some(yr => dbTree[foundMake][md] && dbTree[foundMake][md][yr]);
+                if (existsInYears) {
+                    foundModel = md;
+                    break;
+                }
+            }
+        }
+        
+        if (!foundModel) {
+            for (let md of knownModels) {
+                let regex = new RegExp(`\\b${escapeRegExp(md)}\\b`, 'i');
+                if (regex.test(afterMakeText)) {
+                    foundModel = md;
+                    break;
+                }
+            }
+        }
 
         if(!foundModel) {
             errorLogs.push(`[Line ${lineNum}] ❌ SKIPPED: Unknown Model for ${foundMake}.`);
@@ -479,17 +518,19 @@ function parseAndGenerate() {
         });
         let allSubsArray = [...allSubsForModel].filter(s => s).sort((a,b) => b.length - a.length);
 
-        // --- CONTEXT-AWARE LOGIC SPLITTER ---
-        // Cuts the string into "Included" vs "Excluded" segments based on expanded keywords
+        // --- CONTEXT-AWARE LOGIC SPLITTER & OR GATE ENGINE ---
         let splitPattern = /\b(?:except|exc\.?|excluding|exclude|excludes|not for)\b/i;
         let textSegments = remainderUpper.split(splitPattern);
         
-        let includeSegment = textSegments[0] || "";
+        let includeSegmentRaw = textSegments[0] || "";
         let excludeSegments = textSegments.slice(1);
 
-        // Evaluation Engine: Tests a single vehicle against a specific text segment
+        let orPattern = /\bOR\b/i;
+        let orSegments = includeSegmentRaw.split(orPattern);
+
+        // 🛡️ EVALUATION ENGINE with NO_PARAMS Note Protection
         function evaluateVehicle(v, text) {
-            if (!text.trim()) return true;
+            if (!text.trim()) return 'NO_PARAMS';
 
             let liters = [];
             let lRegex = /(\d\.\d)\s*(?:L|liter|liters)\b/ig;
@@ -511,10 +552,18 @@ function parseAndGenerate() {
             }
 
             let subs = [];
+            let tempText = text;
             allSubsArray.forEach(sub => {
                 let regex = new RegExp(`(^|[\\s,;\\/\\(\\)\\-])(${escapeRegExp(sub)})([\\s,;\\/\\(\\)\\-]|$)`, 'i');
-                if (regex.test(text)) subs.push(sub.toUpperCase());
+                if (regex.test(tempText)) {
+                    subs.push(sub.toUpperCase());
+                    tempText = tempText.replace(regex, ' '); 
+                }
             });
+
+            // 🛡️ PURE NOTE PROTECTOR: If it found zero math variables, it flags as NO_PARAMS to let it pass safely
+            let paramCount = liters.length + drives.length + subs.length + cyls.length;
+            if (paramCount === 0) return 'NO_PARAMS';
 
             if (liters.length > 0 && !liters.includes(v.liter)) return false;
             if (drives.length > 0 && !drives.some(d => v.drive.includes(d))) return false;
@@ -536,12 +585,29 @@ function parseAndGenerate() {
 
         // Execute the Compound Filter
         availableVehicles = availableVehicles.filter(v => {
-            // Must match Include Segment logic
-            if (!evaluateVehicle(v, includeSegment)) return false;
+            let matchesInclude = false;
+            let includeHadParams = false;
 
-            // Must NOT match any Exclude Segment logic
+            for (let orText of orSegments) {
+                let res = evaluateVehicle(v, orText);
+                if (res !== 'NO_PARAMS') includeHadParams = true;
+                if (res === true || res === 'NO_PARAMS') {
+                    matchesInclude = true;
+                    // Note: We don't 'break' immediately if we want to ensure other logic gates are valid, 
+                    // but since it's an OR, finding one valid TRUE is enough.
+                    break;
+                }
+            }
+            
+            // If the include side required parameters, and NONE matched, kill the vehicle.
+            if (includeHadParams && !matchesInclude) return false;
+
             for (let exText of excludeSegments) {
-                if (exText.trim() && evaluateVehicle(v, exText)) return false;
+                if (!exText.trim()) continue;
+                let res = evaluateVehicle(v, exText);
+                // If it returned true, it means it mathematically MATCHED an excluded parameter. Kill it!
+                if (res === true) return false; 
+                // If it returned NO_PARAMS, it's just a pure note (like 'heavy duty brakes'). Let it pass safely!
             }
 
             return true;
@@ -577,6 +643,10 @@ function parseAndGenerate() {
 
         // Scrub Make and Model
         cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(foundMake)}\\b`, 'ig'), ' ').trim();
+        // Handle the original 'Chevy' etc. so they don't stay in notes
+        cleanNotes = cleanNotes.replace(/\bCHEVY\b/ig, ' ').trim();
+        cleanNotes = cleanNotes.replace(/\bVW\b/ig, ' ').trim();
+        cleanNotes = cleanNotes.replace(/\bINFINITY\b/ig, ' ').trim();
         cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(foundModel)}\\b`, 'ig'), ' ').trim();
         cleanNotes = cleanNotes.replace(/\b(VAN|TRUCK|PICKUP)\b/ig, ' ').trim();
 
@@ -584,18 +654,21 @@ function parseAndGenerate() {
             cleanNotes = cleanNotes.replace(regex, ' ');
         });
 
-        // Globally scrub parameters to keep notes column clean
-        cleanNotes = cleanNotes.replace(/\b(\d\.\d)\s*(?:L|liter|liters)\b/ig, ' ');
-        cleanNotes = cleanNotes.replace(/\b(FWD|RWD|AWD|4WD|4X4|2WD)\b/ig, ' ');
-        cleanNotes = cleanNotes.replace(/\b(V-?6|V-?8|V-?10|V-?12|\d{1,2}\s*CYL(?:INDER)?S?|I-?4|I-?6|L-?4|L-?6)\b/ig, ' ');
-        
+        // Only scrub logic terms that accurately captured a catalog parameter. Protects descriptive exclusions!
+        scrubLiterPhrases.forEach(phrase => { cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(phrase), 'ig'), ' '); });
+        scrubDrivePhrases.forEach(phrase => { cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(phrase), 'ig'), ' '); });
+        scrubCylPhrases.forEach(phrase => { cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(phrase), 'ig'), ' '); });
+
         allSubsArray.forEach(sub => {
-            cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(sub)}\\b`, 'ig'), ' ');
+            let excSubRegex = new RegExp(`\\b(?:except|exc\\.?|excluding|exclude|excludes|not for)\\s+${escapeRegExp(sub)}\\b`, 'ig');
+            cleanNotes = cleanNotes.replace(excSubRegex, ' ');
+            let normSubRegex = new RegExp(`(^|[\\s,;\\/\\(\\)\\-])(${escapeRegExp(sub)})([\\s,;\\/\\(\\)\\-]|$)`, 'ig');
+            cleanNotes = cleanNotes.replace(normSubRegex, ' ');
         });
 
-        // The Ultimate Scrubber (Expanded for new terms)
-        cleanNotes = cleanNotes.replace(/\b(?:except|exc\.?|excluding|exclude|excludes|not for)\b/ig, ' ');
-        cleanNotes = cleanNotes.replace(/\b(?:w\/|with|for|include|includes|including)\b/gi, ' '); 
+        // Safe Scrubber: Only removes inclusion verbs. Leaves "excludes" alone so descriptive notes survive.
+        cleanNotes = cleanNotes.replace(/\b(?:w\/|with|include|includes|including)\b/gi, ' '); 
+        cleanNotes = cleanNotes.replace(/\bOR\b/ig, ' '); 
         
         cleanNotes = cleanNotes.replace(/\b(?:Special Edition|Plus)\b/ig, ' ');
         cleanNotes = cleanNotes.replace(/\ball models\b/ig, ' ');
@@ -619,4 +692,96 @@ function parseAndGenerate() {
             row["Year"] = vProfile.year;
             row["Make"] = displayMake;
             row["Model"] = displayModel;
-            row["Sub-Model"] = vProfile
+            row["Sub-Model"] = vProfile.sub;
+            
+            row["Liter"] = vProfile.liter;
+            row["Drive Type"] = vProfile.drive;
+            row["Notes"] = cleanNotes; 
+            
+            if (isRegionLocked) {
+                row["Region"] = regionChoice; 
+            } else {
+                row["Region"] = vProfile.region ? vProfile.region : regionChoice; 
+            }
+            
+            row["RearBrakes"] = vProfile.brake;
+            
+            generatedRows.push(row);
+        });
+    });
+
+    const errorBox = document.getElementById('error-log');
+    if (errorLogs.length > 0) {
+        errorBox.style.display = 'block';
+        errorBox.innerHTML = `<strong>⚠️ PARSER LOGS:</strong><br>` + errorLogs.join('<br>');
+    } else {
+        errorBox.style.display = 'none';
+        errorBox.innerHTML = '';
+    }
+
+    if(generatedRows.length > 0) {
+        table.addData(generatedRows);
+    }
+    
+    if(failedLines.length > 0) {
+        document.getElementById('rawFitment').value = failedLines.join('\n');
+    } else {
+        document.getElementById('rawFitment').value = ""; 
+    }
+}
+
+function exportData() {
+    const rawData = table.getData();
+    if(rawData.length === 0) return alert("Table is empty.");
+
+    const exportHeaders = TABLE_COLUMNS.map(c => c.field);
+    const cleanData = rawData.map(row => {
+        let exportRow = {};
+        exportHeaders.forEach(h => exportRow[h] = row[h] || "");
+        return exportRow;
+    });
+
+    const ws = XLSX.utils.json_to_sheet(cleanData, {header: exportHeaders});
+    
+    TABLE_COLUMNS.forEach((col, idx) => {
+        let cellRef = XLSX.utils.encode_cell({c: idx, r: 0});
+        if(ws[cellRef]) ws[cellRef].v = col.title;
+    });
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "FitmentBatch");
+    XLSX.writeFile(wb, `Fitment_Batch_${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+
+function copyData() {
+    const rawData = table.getData();
+    if(rawData.length === 0) return alert("Table is empty. Nothing to copy.");
+
+    const exportHeaders = TABLE_COLUMNS.map(c => c.field);
+    
+    let tsvString = "";
+    rawData.forEach((row, index) => {
+        let rowArray = exportHeaders.map(h => {
+            let cellValue = row[h] === undefined || row[h] === null ? "" : String(row[h]);
+            return cellValue.replace(/\t/g, ' ').replace(/\n/g, ' '); 
+        });
+        tsvString += rowArray.join('\t') + (index < rawData.length - 1 ? '\n' : '');
+    });
+
+    navigator.clipboard.writeText(tsvString).then(() => {
+        const copyBtn = document.getElementById('copyBtn');
+        const originalText = copyBtn.innerText;
+        copyBtn.innerText = "✓ COPIED!";
+        copyBtn.style.backgroundColor = "#1e8449"; 
+        setTimeout(() => {
+            copyBtn.innerText = originalText;
+            copyBtn.style.backgroundColor = "#27ae60"; 
+        }, 2000);
+    }).catch(err => {
+        console.error('Could not copy text: ', err);
+        alert("Failed to copy data. Your browser might be blocking clipboard access.");
+    });
+}
+</script>
+</body>
+</html>
