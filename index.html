@@ -103,8 +103,8 @@
         <div class="section-title">Raw Fitment Data</div>
         <div class="form-group">
             <label>Paste Text Block Here</label>
-            <textarea id="rawFitment" class="raw-fitment" placeholder="Handles Semicolons: C, Base; RWD"></textarea>
-            <span style="font-size: 10px; color: #888; margin-top: 5px;">Semicolon Fold Engine Active: Detects independent vehicle definitions vs parameter distributions.</span>
+            <textarea id="rawFitment" class="raw-fitment" placeholder="Date Boundary Shield & Deep Attribute Parsing Active. Handles 'From 12/1998' safely and filters Body/Fuel types automatically."></textarea>
+            <span style="font-size: 10px; color: #888; margin-top: 5px;">Protects production dates from being extracted as Model Years, and actively filters auxiliary DB traits (Hatchback, Diesel, etc) while preserving them in notes.</span>
             <div id="error-log"></div>
         </div>
 
@@ -308,7 +308,6 @@ function buildCompressedTree(data) {
 
 function escapeRegExp(string) { return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-// 🛡️ FATAL ERROR CATCHER
 function tryParseAndGenerate() {
     try {
         parseAndGenerate();
@@ -354,13 +353,22 @@ function parseAndGenerate() {
         if(!originalLine) return;
         if(/^\d{4}$/.test(originalLine)) return; 
 
-        // 1. EXTRACT YEAR / RANGE (CENTURY LOCKED)
+        // 1. EXTRACT YEAR / RANGE (DATE SHIELD ACTIVE)
         let years = [];
-        let yearPattern = /(?:^|[\s,;/\(\)\-])(19[5-9]\d|20[0-4]\d)(?:\s*-\s*(19[5-9]\d|20[0-4]\d|\d{2}))?(?=[\s,;/\(\)\-]|$)/g;
+        let yearPattern = /(?<!\d\/)(?:^|[\s,;/\(\)\-])(19[5-9]\d|20[0-4]\d)(?:\s*-\s*(19[5-9]\d|20[0-4]\d|\d{2}))?(?=[\s,;/\(\)\-]|$)/g;
         let yMatch;
         let lineStrippedYears = originalLine;
 
         while ((yMatch = yearPattern.exec(originalLine)) !== null) {
+            let matchIndex = yMatch.index;
+            let fullMatchString = yMatch[0];
+            let yearVal = yMatch[1];
+            
+            let stringUpToYear = originalLine.substring(0, matchIndex + fullMatchString.indexOf(yearVal));
+            if (/(?:\b\d{1,2}[\/-])$/.test(stringUpToYear)) {
+                continue; 
+            }
+
             let start = parseInt(yMatch[1]);
             let end = yMatch[2] ? (yMatch[2].length === 2 ? Math.floor(start/100)*100 + parseInt(yMatch[2]) : parseInt(yMatch[2])) : start;
             let low = Math.min(start, end);
@@ -379,25 +387,26 @@ function parseAndGenerate() {
         let remainderUpper = lineStrippedYears.toUpperCase();
         let remainderOriginal = lineStrippedYears; 
 
-        // EXPANDED EXCLUSIONS
         const exclusionPattern = `\\b(?:except|exc\\.?|excluding|exclude|excludes|not for|without|w\\/o)\\s+`;
 
-        // --- GLOBAL ARRAY EXTRACTION FOR SCRUBBING NOISE ---
-        let scrubPhrasesForMakeModel = [];
+        // --- GLOBAL EXTRACTION FOR MAKE/MODEL NOISE SCRUBBING ---
+        let scrubLiterPhrases = [];
         let tempLRegex = /(\d\.\d)\s*(?:L|liter|liters)\b/ig;
-        let lMatch; while ((lMatch = tempLRegex.exec(remainderUpper)) !== null) scrubPhrasesForMakeModel.push(lMatch[0]);
+        let lMatch; while ((lMatch = tempLRegex.exec(remainderUpper)) !== null) scrubLiterPhrases.push(lMatch[0]);
+        
+        let scrubDrivePhrases = [];
         let tempDRegex = /(FWD|RWD|AWD|4WD|4X4|2WD)\b/ig;
-        let dMatch; while ((dMatch = tempDRegex.exec(remainderUpper)) !== null) scrubPhrasesForMakeModel.push(dMatch[0]);
+        let dMatch; while ((dMatch = tempDRegex.exec(remainderUpper)) !== null) scrubDrivePhrases.push(dMatch[0]);
+        
+        let scrubCylPhrases = [];
         let tempCRegex = /(V-?6|V-?8|V-?10|V-?12|\d{1,2}\s*CYL(?:INDER)?S?|I-?4|I-?6|L-?4|L-?6)\b/ig;
-        let cMatch; while ((cMatch = tempCRegex.exec(remainderUpper)) !== null) scrubPhrasesForMakeModel.push(cMatch[0]);
+        let cMatch; while ((cMatch = tempCRegex.exec(remainderUpper)) !== null) scrubCylPhrases.push(cMatch[0]);
 
-        // Help the make/model parser by temporarily scrubbing engine phrases
         let textForMakeModel = remainderUpper;
-        scrubPhrasesForMakeModel.forEach(p => { 
+        [...scrubLiterPhrases, ...scrubDrivePhrases, ...scrubCylPhrases].forEach(p => { 
             textForMakeModel = textForMakeModel.replace(new RegExp(escapeRegExp(p), 'ig'), ' '); 
         });
         
-        // Wipe logic words so they don't break Make/Model detection
         textForMakeModel = textForMakeModel.replace(/\b(?:OR|except|exc\.?|excluding|exclude|excludes|not for|without|w\/o|with|w\/|include|includes|including)\b/ig, ' ');
         textForMakeModel = textForMakeModel.replace(/\s+/g, ' ').trim();
 
@@ -454,7 +463,6 @@ function parseAndGenerate() {
         let displayMake = foundMake.charAt(0) + foundMake.slice(1).toLowerCase();
         let displayModel = foundModel.split(' ').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
 
-        // Aggregate vehicle pools across all requested years
         let availableVehicles = [];
         years.forEach(yr => {
             if (dbTree[foundMake][foundModel] && dbTree[foundMake][foundModel][yr]) {
@@ -477,14 +485,22 @@ function parseAndGenerate() {
         });
         let allSubsArray = [...allSubsForModel].filter(s => s).sort((a,b) => b.length - a.length);
 
-        // Submodel helper func
-        function hasSubmodels(text, subsArray) {
-            for (let sub of subsArray) {
-                let regex = new RegExp(`(^|[\\s,;\\/\\(\\)\\-])(${escapeRegExp(sub)})([\\s,;\\/\\(\\)\\-]|$)`, 'i');
-                if (regex.test(text)) return true;
+        // --- 🛡️ DEEP ATTRIBUTE AWARENESS ---
+        let allAvailableAttrs = new Set();
+        availableVehicles.forEach(v => {
+            if(v.attrs) v.attrs.forEach(a => allAvailableAttrs.add(a.toUpperCase()));
+        });
+        let sortedAttrs = [...allAvailableAttrs].sort((a,b) => b.length - a.length);
+
+        sortedAttrs.forEach(attr => {
+            let attrRegex = new RegExp(`\\b${escapeRegExp(attr)}\\b`, 'i');
+            if(attrRegex.test(remainderOriginal)) {
+                let filtered = availableVehicles.filter(v => v.attrs && v.attrs.some(a => a.toUpperCase() === attr.toUpperCase()));
+                if(filtered.length > 0) {
+                    availableVehicles = filtered;
+                }
             }
-            return false;
-        }
+        });
 
         // --- CONTEXT-AWARE LOGIC SPLITTER & SEMICOLON FOLD ENGINE ---
         let splitPattern = /\b(?:except|exc\.?|excluding|exclude|excludes|not for|without|w\/o)\b/i;
@@ -493,13 +509,11 @@ function parseAndGenerate() {
         let includeSegmentRaw = textSegments[0] || "";
         let excludeSegments = textSegments.slice(1);
 
-        // Split Included segment by OR to create independent Logic Gates
         let orPattern = /\bOR\b/i;
         let rawOrSegments = includeSegmentRaw.split(orPattern);
         
         let finalLogicGates = [];
         
-        // ✨ SEMICOLON FOLD LOGIC
         rawOrSegments.forEach(orSeg => {
             let semiSegments = orSeg.split(';');
             let currentGateText = "";
@@ -508,13 +522,18 @@ function parseAndGenerate() {
                 let seg = semiSegments[i];
                 if (currentGateText === "") {
                     currentGateText = seg;
-                } else if (hasSubmodels(seg, allSubsArray)) {
-                    // It has submodels, meaning it's an independent vehicle description (OR gate)
-                    finalLogicGates.push(currentGateText);
-                    currentGateText = seg;
                 } else {
-                    // It has NO submodels, meaning it is a modifier for the previous text (AND gate)
-                    currentGateText += " " + seg;
+                    let hasSub = false;
+                    for (let sub of allSubsArray) {
+                        let regex = new RegExp(`(^|[\\s,;\\/\\(\\)\\-])(${escapeRegExp(sub)})([\\s,;\\/\\(\\)\\-]|$)`, 'i');
+                        if (regex.test(seg)) { hasSub = true; break; }
+                    }
+                    if (hasSub) {
+                        finalLogicGates.push(currentGateText);
+                        currentGateText = seg;
+                    } else {
+                        currentGateText += " " + seg;
+                    }
                 }
             }
             if (currentGateText.trim() !== "") {
@@ -522,7 +541,8 @@ function parseAndGenerate() {
             }
         });
 
-        // 🛡️ EVALUATION ENGINE
+
+        // 🛡️ EVALUATION ENGINE with NO_PARAMS Note Protection
         function evaluateVehicle(v, text) {
             if (!text.trim()) return 'NO_PARAMS';
 
@@ -555,7 +575,6 @@ function parseAndGenerate() {
                 }
             });
 
-            // If zero math variables were parsed, it's a pure note ('heavy duty brakes'). Let it pass safely.
             let paramCount = liters.length + drives.length + subs.length + cyls.length;
             if (paramCount === 0) return 'NO_PARAMS';
 
@@ -591,15 +610,12 @@ function parseAndGenerate() {
                 }
             }
             
-            // If the include side required parameters, and NONE matched, kill the vehicle.
             if (includeHadParams && !matchesInclude) return false;
 
             for (let exText of excludeSegments) {
                 if (!exText.trim()) continue;
                 let res = evaluateVehicle(v, exText);
-                // If it returned true, it mathematically MATCHED an excluded parameter. Kill it!
                 if (res === true) return false; 
-                // If it returned NO_PARAMS, it's just a pure note. Let it pass safely!
             }
 
             return true;
@@ -610,25 +626,6 @@ function parseAndGenerate() {
             failedLines.push(originalLine);
             return;
         }
-
-        // --- DYNAMIC ATTRIBUTE FALLBACK ---
-        let validDynamicAttrs = [];
-        let allAvailableAttrs = new Set();
-        availableVehicles.forEach(v => {
-            if(v.attrs) v.attrs.forEach(a => allAvailableAttrs.add(a.toUpperCase()));
-        });
-        let sortedAttrs = [...allAvailableAttrs].sort((a,b) => b.length - a.length);
-
-        sortedAttrs.forEach(attr => {
-            let attrRegex = new RegExp(`\\b${escapeRegExp(attr)}\\b`, 'i');
-            if(attrRegex.test(remainderOriginal)) {
-                let filtered = availableVehicles.filter(v => v.attrs && v.attrs.some(a => a.toUpperCase() === attr.toUpperCase()));
-                if(filtered.length > 0) {
-                    availableVehicles = filtered;
-                    validDynamicAttrs.push(attrRegex);
-                }
-            }
-        });
 
         // --- FINAL NOTES SCRUBBER ---
         let cleanNotes = remainderOriginal; 
@@ -641,17 +638,24 @@ function parseAndGenerate() {
         cleanNotes = cleanNotes.replace(new RegExp(`\\b${escapeRegExp(foundModel)}\\b`, 'ig'), ' ').trim();
         cleanNotes = cleanNotes.replace(/\b(VAN|TRUCK|PICKUP)\b/ig, ' ').trim();
 
-        validDynamicAttrs.forEach(regex => {
-            cleanNotes = cleanNotes.replace(regex, ' ');
-        });
+        // 🛡️ DYNAMIC ATTRIBUTE SCRUBBER REMOVED.
+        // "Hatchback", "Convertible", etc. will be retained in `cleanNotes`.
 
         // Only scrub logic terms that accurately captured a catalog parameter. Protects descriptive exclusions!
-        let scrubLiterRegex = /(\d\.\d)\s*(?:L|liter|liters)\b/ig;
-        let cleanLMatch; while ((cleanLMatch = scrubLiterRegex.exec(includeSegmentRaw)) !== null) cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(cleanLMatch[0]), 'ig'), ' ');
-        let scrubDriveRegex = /(FWD|RWD|AWD|4WD|4X4|2WD)\b/ig;
-        let cleanDMatch; while ((cleanDMatch = scrubDriveRegex.exec(includeSegmentRaw)) !== null) cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(cleanDMatch[0]), 'ig'), ' ');
-        let scrubCylRegex = /(V-?6|V-?8|V-?10|V-?12|\d{1,2}\s*CYL(?:INDER)?S?|I-?4|I-?6|L-?4|L-?6)\b/ig;
-        let cleanCMatch; while ((cleanCMatch = scrubCylRegex.exec(includeSegmentRaw)) !== null) cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(cleanCMatch[0]), 'ig'), ' ');
+        let scrubLiters = [];
+        let xlRegex = /(\d\.\d)\s*(?:L|liter|liters)\b/ig;
+        while ((match = xlRegex.exec(includeSegmentRaw)) !== null) scrubLiters.push(match[0]);
+        scrubLiters.forEach(phrase => { cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(phrase), 'ig'), ' '); });
+
+        let scrubDrives = [];
+        let xdRegex = /(FWD|RWD|AWD|4WD|4X4|2WD)\b/ig;
+        while ((match = xdRegex.exec(includeSegmentRaw)) !== null) scrubDrives.push(match[0]);
+        scrubDrives.forEach(phrase => { cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(phrase), 'ig'), ' '); });
+
+        let scrubCyls = [];
+        let xcRegex = /(V-?6|V-?8|V-?10|V-?12|\d{1,2}\s*CYL(?:INDER)?S?|I-?4|I-?6|L-?4|L-?6)\b/ig;
+        while ((match = xcRegex.exec(includeSegmentRaw)) !== null) scrubCyls.push(match[0]);
+        scrubCyls.forEach(phrase => { cleanNotes = cleanNotes.replace(new RegExp(escapeRegExp(phrase), 'ig'), ' '); });
 
         allSubsArray.forEach(sub => {
             let excSubRegex = new RegExp(`\\b(?:except|exc\\.?|excluding|exclude|excludes|not for|without|w\\/o)\\s+${escapeRegExp(sub)}\\b`, 'ig');
